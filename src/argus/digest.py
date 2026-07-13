@@ -378,3 +378,84 @@ class FileDigestSink:
         path = self.reports_dir / f"digest-{as_of.isoformat()}-run{run_id}.md"
         path.write_text(markdown, encoding="utf-8")
         return path
+
+
+class EmailDigestSink:
+    """Delivers the digest as a plain-text email (markdown reads fine as
+    text) via authenticated SMTP submission — port 465 implicit TLS or
+    587 STARTTLS. Built for Gmail-with-app-password but any submission
+    server works. Network/auth failures raise; CompositeSink turns them
+    into a disclosed delivery failure rather than silence."""
+
+    def __init__(
+        self,
+        *,
+        host: str,
+        port: int,
+        username: str,
+        password: str,
+        sender: str,
+        recipient: str,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.username = username
+        self.password = password
+        self.sender = sender
+        self.recipient = recipient
+
+    def write(self, markdown: str, *, run_id: int, as_of: date) -> None:
+        import smtplib
+        from email.message import EmailMessage
+
+        message = EmailMessage()
+        message["Subject"] = f"Argus digest — {as_of.isoformat()} — run {run_id}"
+        message["From"] = self.sender
+        message["To"] = self.recipient
+        message.set_content(markdown)
+
+        if self.port == 465:
+            with smtplib.SMTP_SSL(self.host, self.port, timeout=30) as smtp:
+                smtp.login(self.username, self.password)
+                smtp.send_message(message)
+        else:
+            with smtplib.SMTP(self.host, self.port, timeout=30) as smtp:
+                smtp.starttls()
+                smtp.login(self.username, self.password)
+                smtp.send_message(message)
+        return None
+
+
+class DeliveryError(RuntimeError):
+    """Some sink(s) failed AFTER the digest was rendered (and possibly after
+    other sinks succeeded). Carries whatever path a successful file sink
+    produced, so the caller can say 'written here, but not delivered'."""
+
+    def __init__(self, message: str, digest_path: Path | None) -> None:
+        super().__init__(message)
+        self.digest_path = digest_path
+
+
+class CompositeSink:
+    """Fan a digest out to several sinks. Every sink is ATTEMPTED even when
+    an earlier one fails — a broken mail server must not stop the file copy —
+    then failures are raised together as DeliveryError. On a headless box an
+    undelivered digest is an unseen digest; failure must be loud."""
+
+    def __init__(self, *sinks: DigestSink) -> None:
+        self.sinks = sinks
+
+    def write(self, markdown: str, *, run_id: int, as_of: date) -> Path | None:
+        path: Path | None = None
+        failures: list[str] = []
+        for sink in self.sinks:
+            try:
+                result = sink.write(markdown, run_id=run_id, as_of=as_of)
+            except Exception as exc:
+                failures.append(f"{type(sink).__name__}: {exc}")
+                continue
+            if path is None and result is not None:
+                path = result
+        if failures:
+            raise DeliveryError("; ".join(failures), digest_path=path)
+        return path

@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from argus import changes
-from argus.digest import DigestSink, render
+from argus.digest import DeliveryError, DigestSink, render
 from argus.gates import GateProfile, run_gates
 from argus.models import (
     AnalystActionRecord,
@@ -50,6 +50,11 @@ class RunOutcome:
     # Crashed runs swept to 'failed' at startup: their committed events were
     # never digested — the caller should offer `argus report --run N`.
     swept_run_ids: tuple[int, ...] = ()
+    # Set when the digest was rendered but one or more sinks failed to
+    # deliver it (e.g. mail server down). The file copy may still exist at
+    # digest_path. An undelivered digest is an unseen digest — the caller
+    # must surface this and exit nonzero.
+    delivery_error: str | None = None
 
 
 @dataclass
@@ -219,12 +224,18 @@ def run(
     writer.finish_run(con, run_id=run_id, status=run_status, finished_at=as_of)
 
     digest_path: Path | None = None
+    delivery_error: str | None = None
     if run_status != "failed":
         report = queries.run_report(con, run_id)
-        digest_path = sink.write(render(report), run_id=run_id, as_of=as_of.date())
+        try:
+            digest_path = sink.write(render(report), run_id=run_id, as_of=as_of.date())
+        except DeliveryError as exc:  # rendered but (partly) undelivered — disclosed, not fatal
+            digest_path = exc.digest_path
+            delivery_error = str(exc)
     return RunOutcome(
         run_id=run_id,
         status=run_status,
         digest_path=digest_path,
         swept_run_ids=tuple(swept),
+        delivery_error=delivery_error,
     )

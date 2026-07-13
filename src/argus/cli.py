@@ -1,9 +1,11 @@
 """Typer CLI. Parses args, resolves paths, calls engine/queries — no logic.
 
-Exit-code policy (see ARCHITECTURE.md): 0 whenever a digest was produced
-(complete OR partial — degradation is disclosed inside the digest, which is
-the alerting channel); 1 only when no digest could be produced. A wrapper
-that pages on nonzero must not page weekly on a flaky free feed.
+Exit-code policy (see ARCHITECTURE.md): 0 whenever the user will SEE a
+digest (complete OR partial — data degradation is disclosed inside the
+digest, which is the alerting channel); 1 when they won't: no digest was
+produced, or it was produced but a delivery sink failed (on a headless box
+an undelivered digest is an unseen digest). A wrapper that pages on nonzero
+must not page weekly on a flaky free feed — and won't: partial data exits 0.
 """
 
 from datetime import UTC, datetime
@@ -14,8 +16,14 @@ import typer
 
 import argus
 from argus import engine
-from argus.config import build_contexts, load_watch_config, resolve_paths, resolve_secrets
-from argus.digest import FileDigestSink, render
+from argus.config import (
+    build_contexts,
+    load_watch_config,
+    resolve_email_config,
+    resolve_paths,
+    resolve_secrets,
+)
+from argus.digest import CompositeSink, DigestSink, EmailDigestSink, FileDigestSink, render
 from argus.gates import DEFAULT_PROFILE
 from argus.sources import EdgarSource, FinnhubSource, YahooSource
 from argus.sources.base import DataSource
@@ -77,6 +85,26 @@ def watch(
             "ARGUS_CONTACT_EMAIL unset — EDGAR fundamentals cross-checks will be "
             "skipped and disclosed."
         )
+    sink: DigestSink = FileDigestSink(paths.reports)
+    try:
+        email = resolve_email_config()
+    except ValueError as exc:  # half-configured channel: refuse to run at all
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if email is not None:
+        sink = CompositeSink(
+            FileDigestSink(paths.reports),
+            EmailDigestSink(
+                host=email.host,
+                port=email.port,
+                username=email.username,
+                password=email.password,
+                sender=email.sender,
+                recipient=email.recipient,
+            ),
+        )
+    else:
+        typer.echo("ARGUS_EMAIL_TO unset — digest lands on disk only.")
     as_of = datetime.now(UTC)
     con = connect(paths.db)
     try:
@@ -86,7 +114,7 @@ def watch(
             con=con,
             sources=sources,
             profile=DEFAULT_PROFILE,
-            sink=FileDigestSink(paths.reports),
+            sink=sink,
             as_of=as_of,
             today=as_of.date(),
             app_version=argus.__version__,
@@ -99,9 +127,19 @@ def watch(
             f"Note: run {swept} crashed before producing a digest — its detected "
             f"events are recoverable with `argus report --run {swept}`."
         )
+    if outcome.delivery_error is not None:
+        location = (
+            f"written to {outcome.digest_path} but NOT delivered"
+            if outcome.digest_path is not None
+            else "NOT delivered anywhere"
+        )
+        typer.echo(f"Digest {location}: {outcome.delivery_error}", err=True)
+        raise typer.Exit(1)  # undelivered = unseen on a headless box
     if outcome.digest_path is not None:
         typer.echo(f"Digest: {outcome.digest_path}")
         raise typer.Exit(0)
+    if outcome.status != "failed":
+        raise typer.Exit(0)  # delivered through a pathless sink (e.g. email only)
     typer.echo("No digest produced — every ticker failed. See run_sources for causes.", err=True)
     raise typer.Exit(1)
 

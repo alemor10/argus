@@ -1,9 +1,21 @@
+from unittest.mock import patch
+
+import pytest
 from typer.testing import CliRunner
 
 from argus.cli import app
 from argus.config import build_contexts, load_watch_config
 
 runner = CliRunner()
+
+EMAIL_VARS = ("ARGUS_EMAIL_TO", "ARGUS_SMTP_USER", "ARGUS_SMTP_PASSWORD")
+
+
+@pytest.fixture(autouse=True)
+def _no_email_env(monkeypatch):
+    """CLI tests must not inherit a developer's real email config."""
+    for var in EMAIL_VARS:
+        monkeypatch.delenv(var, raising=False)
 
 
 def test_help_lists_all_commands():
@@ -59,3 +71,25 @@ def test_scout_names_its_gate(tmp_path):
     result = runner.invoke(app, ["scout"])
     assert result.exit_code == 1
     assert "post-v1" in result.output
+
+
+def test_half_configured_email_refuses_to_run(tmp_path, monkeypatch):
+    monkeypatch.setenv("ARGUS_EMAIL_TO", "me@gmail.com")  # but no SMTP creds
+    runner.invoke(app, ["init", "--root", str(tmp_path)])
+    result = runner.invoke(app, ["watch", "--root", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "half-configured" in result.output
+
+
+def test_delivery_failure_exits_nonzero_but_keeps_the_file(tmp_path, monkeypatch):
+    """Digest written to disk, email dies → exit 1 (undelivered = unseen on a
+    headless box), with the surviving file path named."""
+    monkeypatch.setenv("ARGUS_EMAIL_TO", "me@gmail.com")
+    monkeypatch.setenv("ARGUS_SMTP_USER", "me@gmail.com")
+    monkeypatch.setenv("ARGUS_SMTP_PASSWORD", "app-password")
+    runner.invoke(app, ["init", "--root", str(tmp_path)])
+    with patch("smtplib.SMTP_SSL", side_effect=ConnectionError("mail server down")):
+        result = runner.invoke(app, ["watch", "--root", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "NOT delivered" in result.output
+    assert len(list((tmp_path / "reports").glob("digest-*.md"))) == 1

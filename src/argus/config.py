@@ -98,3 +98,39 @@ def resolve_secrets() -> Secrets:
         finnhub_api_key=os.environ.get("FINNHUB_API_KEY") or None,
         edgar_contact_email=os.environ.get("ARGUS_CONTACT_EMAIL") or None,
     )
+
+
+@dataclass(frozen=True)
+class EmailConfig:
+    """SMTP submission settings for the email digest sink. Presence of
+    ARGUS_EMAIL_TO turns email delivery on; the credentials must then be
+    complete — a half-configured channel fails loudly at the config
+    boundary, never as a silently-skipped delivery."""
+
+    host: str
+    port: int
+    username: str
+    password: str
+    sender: str
+    recipient: str
+
+
+def resolve_email_config() -> EmailConfig | None:
+    recipient = os.environ.get("ARGUS_EMAIL_TO") or None
+    if recipient is None:
+        return None
+    username = os.environ.get("ARGUS_SMTP_USER") or None
+    password = os.environ.get("ARGUS_SMTP_PASSWORD") or None
+    if username is None or password is None:
+        raise ValueError(
+            "ARGUS_EMAIL_TO is set but ARGUS_SMTP_USER/ARGUS_SMTP_PASSWORD are not — "
+            "email delivery is half-configured"
+        )
+    return EmailConfig(
+        host=os.environ.get("ARGUS_SMTP_HOST", "smtp.gmail.com"),
+        port=int(os.environ.get("ARGUS_SMTP_PORT", "465")),
+        username=username,
+        password=password,
+        sender=os.environ.get("ARGUS_EMAIL_FROM", username),
+        recipient=recipient,
+    )

@@ -62,7 +62,9 @@ src/argus/
 │                        #   Takes list[TickerContext] — the seam scout reuses. Only module
 │                        #   that touches sources, gates, and store together.
 ├── digest.py            # PURE render: RunReport → markdown (tri-state per field), plus
-│                        #   DigestSink Protocol and FileDigestSink (reports/digest-*.md)
+│                        #   DigestSink Protocol + FileDigestSink, EmailDigestSink (SMTP
+│                        #   submission), CompositeSink (all sinks attempted; failures
+│                        #   raised together as DeliveryError — undelivered must be loud)
 ├── sources/
 │   ├── __init__.py      # ALL_SOURCE_TYPES registry (hand-written tuple, not entry-points)
 │   ├── base.py          # DataSource Protocol: source_id, covers(ticker), fetch(ticker) → FetchResult;
@@ -324,9 +326,13 @@ Key reads (all in `store/queries.py`, hand-written SQL):
 1. **Config.** Resolve paths (project dir by default; flags/env override) and
    secrets from the environment (`FINNHUB_API_KEY`, `ARGUS_CONTACT_EMAIL` —
    an unset secret omits that source at wiring time and the digest discloses
-   the degradation). Parse `watchlist.yaml`; reject duplicate tickers; merge
-   per-ticker thresholds over defaults; produce `list[TickerContext]`. The
-   engine never sees "the watchlist".
+   the degradation). Email delivery: `ARGUS_EMAIL_TO` turns it on, with
+   `ARGUS_SMTP_USER`/`ARGUS_SMTP_PASSWORD` (+ optional `ARGUS_SMTP_HOST`,
+   `ARGUS_SMTP_PORT`, `ARGUS_EMAIL_FROM`; defaults fit Gmail app-password
+   submission on 465) — half-configured email refuses to run rather than
+   silently skipping delivery. Parse `watchlist.yaml`; reject duplicate
+   tickers; merge per-ticker thresholds over defaults; produce
+   `list[TickerContext]`. The engine never sees "the watchlist".
 2. **Open.** `connect()` (WAL, foreign_keys) → `migrate()` (schema.sql under
    `PRAGMA user_version`). Sweep: runs stuck `running` > 6h → `failed` (their
    committed tickers remain valid baselines). `begin_run('watch')`.
@@ -352,12 +358,14 @@ Key reads (all in `store/queries.py`, hand-written SQL):
    `digest.render` → markdown → `FileDigestSink` →
    `reports/digest-YYYY-MM-DD-runN.md`.
 
-**Exit codes: 0 whenever a digest was produced (complete *or* partial —
-degradation is disclosed inside the digest, which is the alerting channel);
-1 only when no digest could be produced.** Rationale: a wrapper that pages on
-nonzero must not page weekly on a flaky free feed — alarm fatigue is itself a
-silent-failure vector. Nonzero is reserved for "Argus did not report", the
-one condition that genuinely needs outside attention.
+**Exit codes: 0 whenever the user will SEE a digest (complete *or* partial —
+data degradation is disclosed inside the digest, which is the alerting
+channel); 1 when they won't: no digest was produced, or it was rendered but
+a delivery sink failed (on a headless box an undelivered digest is an unseen
+digest).** Rationale: a wrapper that pages on nonzero must not page weekly on
+a flaky free feed — alarm fatigue is itself a silent-failure vector — so
+partial *data* exits 0. Nonzero is reserved for "the human will not get a
+report", the one condition that genuinely needs outside attention.
 
 Partial-failure behavior, by construction: one source down → its fields show
 "no data (finnhub: HTTP 502)" and cross-checks are skipped-and-disclosed; one
@@ -528,6 +536,7 @@ the point.
 | Per-ticker events commit separately from the data commit | One transaction spanning persist + diff | A crash exactly between the two commits loses that ticker's events for the window (data stays durable and shows in the next watchlist). Accepted: the window is milliseconds weekly, and merging would either re-derive snapshots outside SQL or complicate the writer's transaction contract. |
 | Crashed runs: committed data stays baseline-eligible; recovery is offered, not automatic | Exclude crashed runs from baselines | Excluding them would re-report stale diffs; instead the sweep returns the crashed run ids and the CLI points at `argus report --run N`, which renders the crashed run's already-persisted events. |
 | First-run analyst history is baseline, not news | Emit every first-seen action | The feed hands over its full dated history on a ticker's first run (1,100 lines observed live); suppressed then, set-membership from the next run on. |
+| Delivery failure exits 1 (unlike partial data, which exits 0) | Treat any produced digest as success | Partial data still reaches the reader with its degradation disclosed; a failed delivery sink on a headless box means the reader gets NOTHING — that is the silent-failure class this tool exists to prevent. The file copy still lands and the error names it. |
 
 ## Post-v1 seams (built), and where extensions land
 
