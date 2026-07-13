@@ -48,13 +48,15 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 
-### Post-v1 — Discovery module (larger; gated on paid-data decision)
-- [ ] Universe screening: growth + valuation-adjusted-for-growth (PEG-style, never
-      naive low-P/E), margin/balance-sheet health, sector-underweight context,
-      value-trap exclusion, liquidity/market-cap floors
-- [ ] Stricter quality gates than the monitor — unknown names skew thinner-data
-- [ ] Data source: requires a paid bulk-fundamentals API (decision pending — see
-      spike findings)
+### Discovery module — SHIPPED as scout v1.1 (2026-07-13, free-screener path)
+- [x] Universe screening: growth + valuation-adjusted-for-growth (PEG-style, never
+      naive low-P/E), margin/balance-sheet health, value-trap exclusion,
+      liquidity/market-cap floors (server-side at the screener)
+- [x] Stricter quality gates than the monitor: post-enrichment eligibility —
+      core fields must verify cleanly, verified PEG must honor the screen window
+- [x] Data source: free TradingView scanner behind a `Screener` protocol (see
+      the decided section below); paid EODHD remains the upgrade path
+- [ ] Sector-underweight context (needs portfolio weights — post-v1.1)
 
 ## Data sources (validated in Phase-0 spike, 2026-07-12)
 

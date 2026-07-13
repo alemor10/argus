@@ -234,7 +234,10 @@ def run(
 
     digest_path: Path | None = None
     delivery_error: str | None = None
-    if run_status != "failed":
+    # Scout runs digest even when failed: the candidate verdicts persisted by
+    # before_digest ("every fetch died" is a full page of exclusions) are
+    # information, and the outage path already sets this precedent.
+    if run_status != "failed" or kind == "scout":
         report = queries.run_report(con, run_id)
         try:
             digest_path = sink.write(render(report), run_id=run_id, as_of=as_of.date())

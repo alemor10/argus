@@ -30,12 +30,14 @@ clause; and any past digest can be regenerated bit-for-bit with
    engine), plus optional `observed_at` when the source reports its own data
    timestamp.
 4. **Read-only.** The mutation surface of the entire program: INSERTs into the
-   append-only tables, two UPDATEs on `runs` (finish/sweep), one file write
-   (the digest). One human-invoked exception: `argus init` scaffolds a
-   commented example `watchlist.yaml` when none exists (it refuses to
-   overwrite and adds no live tickers). No other command touches
-   `watchlist.yaml`, and Argus never adds tickers on its own. Nothing trades,
-   nothing predicts, nothing acts.
+   append-only tables, UPDATEs on `runs` (finish/sweep/notes), one file write
+   (the digest). Two human-invoked exceptions, never reachable from the
+   scheduled path: `argus init` scaffolds commented example config files when
+   none exist (refuses to overwrite, adds no live tickers), and
+   `argus promote TICKER --thesis "..."` appends one watchlist entry with a
+   mandatory human-written thesis — writing the thesis IS the decision. No
+   other code touches `watchlist.yaml`, and Argus never adds tickers on its
+   own. Nothing trades, nothing predicts, nothing acts.
 5. **Silence is a statement.** A digest is written on every run that produced
    any data — including a run with zero change events ("nothing changed" is
    information). Degraded runs disclose their degradation in the digest
@@ -568,7 +570,11 @@ Scout finds candidates; the human decides. Weekly flow:
    gates plus scout's stricter eligibility: a candidate whose core fields
    (price, P/E or PEG, margins) are missing or quarantined is EXCLUDED from
    the proposal list, with the reason shown — unknown names skew
-   thinner-data, and scout proposes only clean ones. The diff phase is
+   thinner-data, and scout proposes only clean ones. The VERIFIED PEG must
+   also honor the screen's own window (0 < peg ≤ ceiling): the first live
+   run surfaced a screener-claimed PEG of 0.008 that verified at 11.99
+   (base-effect TTM growth) — screener numbers nominate, gated numbers
+   decide, in both directions. The diff phase is
    skipped for scout runs (candidate sets churn weekly; diffing them is
    noise — continuity is carried by streaks instead).
 4. **Report** — a scout digest (same sinks): proposals table with OUR gated

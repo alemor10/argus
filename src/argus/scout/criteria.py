@@ -170,10 +170,15 @@ def _rank_key(row: ScreenerRow) -> tuple[float, float, str, str]:
     return (row.peg_ttm, -market_cap, _bare_symbol(row.ticker), row.ticker)
 
 
-def _bare_symbol(ticker: str) -> str:
-    """'nasdaq:NVDA' → 'NVDA': exclusion (and alphabetical ordering) compare
-    bare symbols case-insensitively, whatever prefix a screener uses."""
-    return ticker.rsplit(":", 1)[-1].strip().upper()
+def house_symbol(ticker: str) -> str:
+    """Canonical house symbology: bare symbol, uppercase, dashes for class
+    shares ('nasdaq:brk.b' → 'BRK-B'). THE one normalizer — exclusion
+    matching, ranking, contexts, and the store must all share one spelling,
+    or a watched BRK-B fails to exclude TradingView's BRK.B row."""
+    return ticker.rsplit(":", 1)[-1].strip().upper().replace(".", "-")
+
+
+_bare_symbol = house_symbol  # ranking/exclusion use the canonical form
 
 
 def _fmt(value: float) -> str:

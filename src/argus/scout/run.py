@@ -18,7 +18,7 @@ from argus.digest import DeliveryError, DigestSink, render
 from argus.fields import Field
 from argus.gates import GateProfile
 from argus.models import ScoutCandidateRecord, TickerContext
-from argus.scout.criteria import ScoutCriteria, ScreenedCandidate, screen
+from argus.scout.criteria import ScoutCriteria, ScreenedCandidate, house_symbol, screen
 from argus.scout.screener import Screener, ScreenerError
 from argus.sources.base import DataSource
 from argus.store import queries, writer
@@ -48,15 +48,28 @@ def run_scout(
         return _outage_run(con, sink, as_of, app_version, str(exc))
 
     candidates = screen(rows, criteria, exclude)
-    # TradingView reports dotted class shares (BRK.B); house symbology — and
-    # the fetch stack — use dashes. Normalized ONCE here so run_tickers,
-    # observations, and scout_candidates all share one spelling.
-    contexts = [TickerContext(ticker=_house_symbol(c.row.ticker)) for c in candidates]
+    # Dedupe on the canonical symbol: two screener rows can collapse to one
+    # house ticker (DUP.A/DUP-A, or a feed hiccup repeating a symbol), and a
+    # duplicate would violate the store's per-run primary keys and kill the
+    # run. screen() returns rank order, so first occurrence = best rank.
+    unique: dict[str, ScreenedCandidate] = {}
+    for candidate in candidates:
+        unique.setdefault(house_symbol(candidate.row.ticker), candidate)
+    candidates = list(unique.values())
+    contexts = [TickerContext(ticker=symbol) for symbol in unique]
+
+    skipped = getattr(screener, "last_skipped", 0)
 
     def before_digest(con_: sqlite3.Connection, run_id: int) -> None:
         writer.write_scout_candidates(
             con_, run_id=run_id, records=_verdicts(con_, run_id, candidates, criteria)
         )
+        if skipped:
+            # The screener dropped rows it could not identify — countable
+            # degradation belongs in the digest header, not a log nobody reads.
+            writer.append_run_note(
+                con_, run_id=run_id, note=f"screener skipped {skipped} unparseable row(s)"
+            )
 
     return engine.run(
         contexts,
@@ -72,26 +85,28 @@ def run_scout(
     )
 
 
-def _house_symbol(ticker: str) -> str:
-    """TV's dotted class shares → the dash symbology used stack-wide."""
-    return ticker.strip().upper().replace(".", "-")
-
-
 def _verdicts(
     con: sqlite3.Connection,
     run_id: int,
     candidates: Sequence[ScreenedCandidate],
     criteria: ScoutCriteria,
 ) -> list[ScoutCandidateRecord]:
-    """Post-enrichment eligibility: proposed iff the gated snapshot carries
-    accepted PRICE and (PEG or P/E TTM), AND the verified PEG (when we have
-    one) honors the screen's ceiling — the first live run surfaced a name
-    the screener called PEG 0.008 that verified at 11.99 (base-effect TTM
-    growth), exactly the value-trap class the screen exists to exclude.
-    Everything else is excluded with a reason the digest prints verbatim."""
+    """Post-enrichment eligibility, per ARCHITECTURE's core-fields rule
+    (price, P/E or PEG, margins — missing OR quarantined excludes), plus the
+    verified-PEG window: the first live run surfaced a name the screener
+    called PEG 0.008 that verified at 11.99 (base-effect TTM growth), and the
+    mirror case (verified PEG ≤ 0) is the same divergence class with the sign
+    flipped. Every exclusion reason is printed verbatim in the digest."""
+    core_fields = (
+        Field.PRICE,
+        Field.PEG,
+        Field.PE_TTM,
+        Field.GROSS_MARGIN,
+        Field.OPERATING_MARGIN,
+    )
     records = []
     for candidate in candidates:
-        ticker = _house_symbol(candidate.row.ticker)
+        ticker = house_symbol(candidate.row.ticker)
         row = con.execute(
             "SELECT status, error FROM run_tickers WHERE run_id = ? AND ticker = ?",
             (run_id, ticker),
@@ -107,25 +122,38 @@ def _verdicts(
                 missing.append("price")
             if Field.PEG not in snapshot.values and Field.PE_TTM not in snapshot.values:
                 missing.append("P/E or PEG")
+            if (
+                Field.GROSS_MARGIN not in snapshot.values
+                and Field.OPERATING_MARGIN not in snapshot.values
+            ):
+                missing.append("margins")
+            quarantined = sorted(
+                field.value for field in core_fields if field in snapshot.quarantined
+            )
             verified_peg = snapshot.values.get(Field.PEG)
-            if missing:
-                quarantined = sorted(
-                    field.value
-                    for field in (Field.PRICE, Field.PEG, Field.PE_TTM)
-                    if field in snapshot.quarantined
-                )
+            if missing or quarantined:
                 status = "excluded"
-                reason = "core fields not verifiable: " + ", ".join(missing)
+                parts = []
+                if missing:
+                    parts.append("missing: " + ", ".join(missing))
                 if quarantined:
-                    reason += f" (quarantined: {', '.join(quarantined)})"
-            elif verified_peg is not None and verified_peg.value > criteria.max_peg:
+                    parts.append("quarantined: " + ", ".join(quarantined))
+                reason = "core fields not verifiable — " + "; ".join(parts)
+            elif verified_peg is not None and not (0 < verified_peg.value <= criteria.max_peg):
                 status = "excluded"
                 claimed = candidate.row.peg_ttm
-                reason = (
-                    f"verified PEG {verified_peg.value:.2f} exceeds the screen "
-                    f"ceiling {criteria.max_peg:g}"
-                    + (f" (screener claimed {claimed:g})" if claimed is not None else "")
-                )
+                if verified_peg.value > criteria.max_peg:
+                    reason = (
+                        f"verified PEG {verified_peg.value:.2f} exceeds the screen "
+                        f"ceiling {criteria.max_peg:g}"
+                    )
+                else:
+                    reason = (
+                        f"verified PEG {verified_peg.value:.2f} is zero or negative — "
+                        "meaningless per the screen's 0 < peg rule"
+                    )
+                if claimed is not None:
+                    reason += f" (screener claimed {claimed:g})"
         records.append(
             ScoutCandidateRecord(
                 ticker=ticker,

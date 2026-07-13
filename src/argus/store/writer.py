@@ -200,6 +200,16 @@ def write_scout_candidates(
             )
 
 
+def append_run_note(con: sqlite3.Connection, *, run_id: int, note: str) -> None:
+    """Append a line to runs.notes — rendered in the digest header. The one
+    sanctioned post-finish update besides finish_run itself."""
+    with con:
+        con.execute(
+            "UPDATE runs SET notes = COALESCE(notes || '; ', '') || ? WHERE run_id = ?",
+            (note, run_id),
+        )
+
+
 def finish_run(
     con: sqlite3.Connection,
     *,

@@ -13,7 +13,7 @@ Screen (screener claims, verified independently above):
 
 ## Excluded after enrichment
 
-- THINCO (screen rank 2): core fields not verifiable: P/E or PEG
+- THINCO (screen rank 2): core fields not verifiable — missing: P/E or PEG, margins
 - DEADCO (screen rank 3): fetch failed: yahoo: HTTP 502 from upstream
 
 _Exclusion is a data-quality verdict, not an investment one — these names passed the screen but their fundamentals could not be verified cleanly this run._

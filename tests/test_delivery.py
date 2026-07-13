@@ -143,6 +143,20 @@ class TestDiscordDigestSink:
         payload = __import__("json").loads(captured["data"]["payload_json"])
         assert len(payload["content"]) <= 2000
 
+    def test_scout_digest_headline_carries_the_proposals(self):
+        """Review finding: the headline extractor only knew '## Changes', so
+        every scout Discord post was an empty title+status shell."""
+        from argus.digest import _discord_headline
+
+        scout_digest = (
+            "# Argus scout digest — run 4 — 2026-07-13\n\nStatus: complete.\n\n"
+            "## Proposals\n\n| # | Ticker |\n| --- | --- |\n| 1 | CLEANCO |\n\n"
+            "## Data health\n\n- yahoo: 1 ok\n"
+        )
+        headline = _discord_headline(scout_digest)
+        assert "CLEANCO" in headline
+        assert "Data health" not in headline
+
     def test_http_error_raises(self):
         from argus.digest import DiscordDigestSink
 

@@ -171,19 +171,6 @@ def watch(
         typer.echo(f"No watchlist at {paths.watchlist} — run `argus init` first.", err=True)
         raise typer.Exit(1)
     contexts = build_contexts(load_watch_config(paths.watchlist))
-    secrets = resolve_secrets()
-    sources: list[DataSource] = [YahooSource()]
-    if secrets.finnhub_api_key:
-        sources.append(FinnhubSource(secrets.finnhub_api_key))
-    else:
-        typer.echo("FINNHUB_API_KEY unset — price cross-checks will be skipped and disclosed.")
-    if secrets.edgar_contact_email:
-        sources.append(EdgarSource(secrets.edgar_contact_email))
-    else:
-        typer.echo(
-            "ARGUS_CONTACT_EMAIL unset — EDGAR fundamentals cross-checks will be "
-            "skipped and disclosed."
-        )
     try:
         sink = _build_sinks(paths)
     except ValueError as exc:  # half-configured channel: refuse to run at all
@@ -265,7 +252,11 @@ def scout(root: RootOpt = None) -> None:
     from argus.scout.screener import TradingViewScreener
 
     paths = resolve_paths(root)
-    criteria = load_scout_criteria(paths.scout)
+    try:
+        criteria = load_scout_criteria(paths.scout)
+    except Exception as exc:  # typo'd key / malformed YAML: crisp refusal, no traceback
+        typer.echo(f"Cannot load {paths.scout}: {exc}", err=True)
+        raise typer.Exit(1) from exc
     exclude: set[str] = set()
     if paths.watchlist.exists():
         exclude = {
@@ -335,8 +326,15 @@ def promote(
     original = paths.watchlist.read_text(encoding="utf-8")
     entry = f"  - ticker: {symbol}\n    thesis: {json.dumps(thesis.strip())}\n"
     if re.search(r"^tickers:\s*\[\]\s*$", original, flags=re.MULTILINE):
+        # Replacement via lambda: a plain string here is a TEMPLATE, and the
+        # json.dumps-escaped thesis would be re-interpreted (backslashes
+        # collapse, \g crashes) — silent corruption of the user's words.
         updated = re.sub(
-            r"^tickers:\s*\[\]\s*$", f"tickers:\n{entry.rstrip()}", original, count=1, flags=re.MULTILINE
+            r"^tickers:\s*\[\]\s*$",
+            lambda _match: f"tickers:\n{entry.rstrip()}",
+            original,
+            count=1,
+            flags=re.MULTILINE,
         )
     else:
         # Appending works when the tickers list is the file's last section —
@@ -360,7 +358,10 @@ def promote(
             err=True,
         )
         raise typer.Exit(1)
-    paths.watchlist.write_text(updated, encoding="utf-8")
+    # Atomic replace: a crash mid-write must never truncate the watchlist.
+    staging = paths.watchlist.with_suffix(".yaml.tmp")
+    staging.write_text(updated, encoding="utf-8")
+    staging.replace(paths.watchlist)
     typer.echo(f"{symbol} promoted to the watchlist — it will appear in the next watch digest.")
 
 

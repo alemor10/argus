@@ -187,6 +187,76 @@ class TestScoutRun:
         assert "verified PEG 11.99" in row["exclusion_reason"]
         assert "0.008" in row["exclusion_reason"]  # the screener's claim, named
 
+    def test_verified_negative_peg_also_excludes(self, con):
+        """Review finding: the ceiling-only check let a verified PEG of -3.4
+        (negative earnings growth) through — 'zero or negative is meaningless,
+        never a bargain' applies to verified values too."""
+
+        class _NegativePegSource(_StubSource):
+            def fetch(self, ticker):
+                result = super().fetch(ticker)
+                observations = tuple(
+                    o for o in result.observations if o.field is not Field.PEG
+                ) + (
+                    RawObservation(
+                        ticker=ticker, field=Field.PEG, value_num=-3.4,
+                        source=Source.YAHOO, fetched_at=self._fetched_at,
+                    ),
+                )
+                return FetchResult(observations=observations)
+
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=[_row("CLEANCO", peg=0.9)]),
+            criteria=ScoutCriteria(top_n=10),
+            sources=[_NegativePegSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        row = con.execute(
+            "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
+            (outcome.run_id,),
+        ).fetchone()
+        assert row["status"] == "excluded"
+        assert "zero or negative" in row["exclusion_reason"]
+
+    def test_duplicate_house_symbols_dedupe_instead_of_crashing(self, con):
+        """Review finding: DUP.A and DUP-A both normalize to DUP-A; without
+        dedupe the second insert violated the store's per-run keys and killed
+        the whole run."""
+        sink = _CaptureSink()
+        outcome = _scout(
+            con, sink, RUN1_AT, rows=[_row("DUP.A", peg=0.5), _row("DUP-A", peg=0.7)]
+        )
+        assert outcome.status in ("complete", "partial")
+        rows = con.execute(
+            "SELECT ticker FROM scout_candidates WHERE run_id = ?", (outcome.run_id,)
+        ).fetchall()
+        assert [r["ticker"] for r in rows] == ["DUP-A"]  # once, best rank kept
+
+    def test_all_enrichment_failed_still_digests(self, con):
+        """Review finding: screener fine + every fetch dead produced NO digest
+        even though a full page of exclusion verdicts existed."""
+        sink = _CaptureSink()
+        outcome = _scout(con, sink, RUN1_AT, rows=[_row("DEADCO")])
+        assert outcome.status == "failed"
+        digest = sink.digests[outcome.run_id]
+        assert "DEADCO" in digest and "fetch failed" in digest
+
+    def test_outage_run_does_not_break_streaks(self, con):
+        """Review finding: a screener-outage week reset every streak to 'new'
+        — an outage is not a verdict."""
+        sink = _CaptureSink()
+        _scout(con, sink, RUN1_AT)  # CLEANCO proposed
+        _scout(con, sink, datetime(2026, 7, 10, 15, 0, tzinfo=UTC), error=ScreenerError("503"))
+        third = _scout(con, sink, RUN2_AT)  # CLEANCO proposed again
+        assert queries.scout_streak(con, "CLEANCO", third.run_id) == 2
+
     def test_streak_counts_consecutive_proposed_runs(self, con):
         sink = _CaptureSink()
         first = _scout(con, sink, RUN1_AT)
@@ -287,6 +357,19 @@ class TestPromote:
         again = runner.invoke(app, ["promote", "x", "--thesis", "t2", "--root", str(tmp_path)])
         assert again.exit_code == 1
         assert "already" in again.output
+
+    def test_thesis_with_backslashes_newlines_unicode_round_trips(self, tmp_path, monkeypatch):
+        """Review finding: json.dumps output fed to re.sub as a TEMPLATE
+        collapsed backslashes and crashed on non-ASCII — the user's words
+        must come back exactly."""
+        self._init(tmp_path, monkeypatch)
+        thesis = 'Ставка on C:\\ drives and "\\n" literals — moat™'
+        result = runner.invoke(
+            app, ["promote", "WEIRD", "--thesis", thesis, "--root", str(tmp_path)]
+        )
+        assert result.exit_code == 0
+        contexts = build_contexts(load_watch_config(tmp_path / "watchlist.yaml"))
+        assert contexts[0].thesis == thesis
 
     def test_garbage_ticker_and_empty_thesis_refused(self, tmp_path, monkeypatch):
         self._init(tmp_path, monkeypatch)

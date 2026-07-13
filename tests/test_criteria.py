@@ -163,6 +163,14 @@ def test_exclusion_is_case_insensitive():
     assert [c.row.ticker for c in candidates] == ["AAPL"]
 
 
+def test_exclusion_bridges_dotted_and_dashed_class_shares():
+    """Review finding: a watched BRK-B (house dash symbology) must exclude
+    TradingView's dotted BRK.B row — and the reverse spelling too. Without
+    dot/dash canonicalization scout proposed names already held."""
+    assert screen([make_row(ticker="BRK.B")], ScoutCriteria(), exclude={"BRK-B"}) == []
+    assert screen([make_row(ticker="BRK-B")], ScoutCriteria(), exclude={"BRK.B"}) == []
+
+
 def test_excluded_rows_do_not_consume_ranks_or_top_n_slots():
     rows = [
         make_row(ticker="HELD", peg_ttm=0.1),  # would rank first if not held

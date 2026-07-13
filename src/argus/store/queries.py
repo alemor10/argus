@@ -140,13 +140,20 @@ def quarantine_report(con: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]
 
 def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
     """Consecutive scout runs, up to and including run_id, in which this
-    ticker was PROPOSED. Any scout run where it was absent or excluded
-    breaks the streak — continuity is earned, not assumed."""
+    ticker was PROPOSED. A scout run where it was absent or excluded breaks
+    the streak — continuity is earned, not assumed. Runs that evaluated
+    NOTHING (screener outage: zero scout_candidates rows) are skipped, not
+    streak-breaking: an outage is not a verdict."""
     streak = 0
     for row in con.execute(
         "SELECT run_id FROM runs WHERE kind = 'scout' AND run_id <= ? ORDER BY run_id DESC",
         (run_id,),
     ):
+        evaluated = con.execute(
+            "SELECT 1 FROM scout_candidates WHERE run_id = ? LIMIT 1", (row["run_id"],)
+        ).fetchone()
+        if evaluated is None:
+            continue
         proposed = con.execute(
             "SELECT 1 FROM scout_candidates WHERE run_id = ? AND ticker = ? AND status = 'proposed'",
             (row["run_id"], ticker),

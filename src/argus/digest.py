@@ -142,14 +142,14 @@ def _proposals_section(report: RunReport) -> list[str]:
 
         streak = f"{p.streak}w" if p.streak > 1 else "new"
         lines.append(
-            f"| {p.rank} | {p.ticker} | {streak} | {cell(Field.PRICE)} | {cell(Field.PEG)} "
+            f"| {p.rank} | {_cell(p.ticker)} | {streak} | {cell(Field.PRICE)} | {cell(Field.PEG)} "
             f"| {cell(Field.PE_FWD)} | {cell(Field.GROSS_MARGIN)} "
             f"| {cell(Field.OPERATING_MARGIN)} | {cell(Field.DEBT_TO_EQUITY)} |"
         )
     lines.append("")
     lines.append("Screen (screener claims, verified independently above):")
     for p in proposed:
-        lines.append(f"- **{p.ticker}** — {_cell('; '.join(p.screen_reasons.values()))}")
+        lines.append(f"- **{_cell(p.ticker)}** — {_cell('; '.join(p.screen_reasons.values()))}")
     return lines
 
 
@@ -159,7 +159,8 @@ def _scout_exclusions_section(report: RunReport) -> list[str]:
         return ["No screen survivors were excluded by the quality gates."]
     lines = ["## Excluded after enrichment", ""]
     lines += [
-        f"- {p.ticker} (screen rank {p.rank}): {p.exclusion_reason}" for p in excluded
+        f"- {_cell(p.ticker)} (screen rank {p.rank}): {_cell(p.exclusion_reason or '')}"
+        for p in excluded
     ]
     lines.append("")
     lines.append(
@@ -606,7 +607,8 @@ def _discord_headline(markdown: str) -> str:
     in_changes = False
     for line in lines:
         if line.startswith("## "):
-            in_changes = line.strip() == "## Changes"
+            # Watch digests hook with Changes; scout digests with Proposals.
+            in_changes = line.strip() in ("## Changes", "## Proposals")
             continue
         if in_changes and line.strip():
             changes.append(line)
