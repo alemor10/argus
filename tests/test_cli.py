@@ -72,10 +72,11 @@ def test_report_on_unknown_run_fails_loudly(tmp_path):
     assert result.exit_code == 1
 
 
-def test_scout_names_its_gate(tmp_path):
-    result = runner.invoke(app, ["scout"])
-    assert result.exit_code == 1
-    assert "post-v1" in result.output
+def test_help_includes_scout_and_promote():
+    result = runner.invoke(app, ["--help"])
+    assert result.exit_code == 0
+    assert "scout" in result.output
+    assert "promote" in result.output
 
 
 def test_half_configured_email_refuses_to_run(tmp_path, monkeypatch):

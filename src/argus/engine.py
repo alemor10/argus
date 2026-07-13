@@ -17,7 +17,7 @@ Flow per run (see ARCHITECTURE.md, Data flow):
 
 import sqlite3
 import time
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -129,10 +129,17 @@ def run(
     today: date,
     app_version: str,
     kind: Literal["watch", "scout"] = "watch",
+    before_digest: Callable[[sqlite3.Connection, int], None] | None = None,
 ) -> RunOutcome:
     """Execute one run. `as_of`/`today` are injected — nothing below the CLI
     reads the clock, which is what makes golden end-to-end tests exact.
-    `as_of` MUST be timezone-aware UTC (models.require_aware at entry)."""
+    `as_of` MUST be timezone-aware UTC (models.require_aware at entry).
+
+    Scout runs skip the diff phase: candidate sets churn weekly, and their
+    continuity is carried by scout_candidates streaks, not change events.
+    `before_digest(con, run_id)` runs after finish_run and before the report
+    is assembled — scout uses it to persist candidate verdicts so the digest
+    reads them from SQL like everything else."""
     require_aware(as_of)
     swept = writer.sweep_stale_runs(con, now=as_of)
     run_id = writer.begin_run(con, kind=kind, started_at=as_of, app_version=app_version)
@@ -173,7 +180,7 @@ def run(
                 error=f"unexpected: {exc}",
             )
             status = "failed"
-        if status != "failed":
+        if status != "failed" and kind == "watch":
             try:
                 baseline_id = queries.baseline_run(con, ctx.ticker, run_id)
                 baseline = (
@@ -222,6 +229,8 @@ def run(
     else:
         run_status = "failed"
     writer.finish_run(con, run_id=run_id, status=run_status, finished_at=as_of)
+    if before_digest is not None:
+        before_digest(con, run_id)  # persists regardless of run status
 
     digest_path: Path | None = None
     delivery_error: str | None = None

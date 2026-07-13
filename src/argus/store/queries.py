@@ -16,6 +16,7 @@ from argus.models import (
     QuarantinedObservation,
     QuarantineHit,
     RunReport,
+    ScoutProposal,
     Snapshot,
     SourceHealth,
     Thresholds,
@@ -137,6 +138,47 @@ def quarantine_report(con: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]
     ).fetchall()
 
 
+def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
+    """Consecutive scout runs, up to and including run_id, in which this
+    ticker was PROPOSED. Any scout run where it was absent or excluded
+    breaks the streak — continuity is earned, not assumed."""
+    streak = 0
+    for row in con.execute(
+        "SELECT run_id FROM runs WHERE kind = 'scout' AND run_id <= ? ORDER BY run_id DESC",
+        (run_id,),
+    ):
+        proposed = con.execute(
+            "SELECT 1 FROM scout_candidates WHERE run_id = ? AND ticker = ? AND status = 'proposed'",
+            (row["run_id"], ticker),
+        ).fetchone()
+        if proposed is None:
+            break
+        streak += 1
+    return streak
+
+
+def _scout_proposals(con: sqlite3.Connection, run_id: int) -> tuple[ScoutProposal, ...]:
+    """Hydrate the run's scout rows, proposed first (by rank), then excluded."""
+    rows = con.execute(
+        """SELECT ticker, rank, status, exclusion_reason, screen_reasons, screener_metrics
+           FROM scout_candidates WHERE run_id = ?
+           ORDER BY CASE status WHEN 'proposed' THEN 0 ELSE 1 END, rank""",
+        (run_id,),
+    ).fetchall()
+    return tuple(
+        ScoutProposal(
+            ticker=row["ticker"],
+            rank=row["rank"],
+            status=row["status"],
+            exclusion_reason=row["exclusion_reason"],
+            screen_reasons=json.loads(row["screen_reasons"]),
+            screener_metrics=json.loads(row["screener_metrics"]),
+            streak=scout_streak(con, row["ticker"], run_id) if row["status"] == "proposed" else 0,
+        )
+        for row in rows
+    )
+
+
 def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
     """Assemble the digest's full input entirely from SQL: persisted events,
     per-ticker snapshots with provenance, every quarantined observation
@@ -145,7 +187,7 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
     from the live watchlist). `argus report --run N` is exactly this +
     render — bit-for-bit."""
     run = con.execute(
-        "SELECT kind, started_at, status FROM runs WHERE run_id = ?", (run_id,)
+        "SELECT kind, started_at, status, notes FROM runs WHERE run_id = ?", (run_id,)
     ).fetchone()
     if run is None:
         raise ValueError(f"no such run: {run_id}")
@@ -165,7 +207,9 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
         kind=run["kind"],
         as_of=datetime.fromisoformat(run["started_at"]),
         status=run["status"],
+        notes=run["notes"],
         tickers=tickers,
+        scout=_scout_proposals(con, run_id) if run["kind"] == "scout" else (),
     )
 
 

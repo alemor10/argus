@@ -160,6 +160,14 @@ class YahooSource:
         if isinstance(records, (list, tuple)):
             malformed: list[Any] = []
             for record in records:
+                if _is_out_of_scope_row(record):
+                    # Not malformed — a shape we deliberately don't model:
+                    # price-target-only changes, and historical (2015-16 era)
+                    # rows without a destination grade, which our action
+                    # model cannot even key. Quarantining those forever, on
+                    # every run, erodes the quarantine section's credibility
+                    # (observed live: 4 of 5 noise rows).
+                    continue
                 parsed = _parse_action(record, ticker, self.source_id, fetched_at)
                 if parsed is None:
                     malformed.append(record)
@@ -239,6 +247,18 @@ def _first_earnings_date(raw: Any) -> date | None:
         except ValueError as exc:
             raise _UnreadableValue(text) from exc
     raise _UnreadableValue(str(raw))
+
+
+def _is_out_of_scope_row(record: Any) -> bool:
+    """yfinance mixes shapes into upgrades_downgrades that are not grade
+    actions: price-target-change rows, and old rows with no destination
+    grade at all. Our AnalystActionRecord requires to_grade (it is part of
+    the natural key) — a row without one is a different event type, not a
+    broken instance of ours. Non-dict garbage stays malformed."""
+    if not isinstance(record, dict):
+        return False
+    to_grade = record.get("ToGrade")
+    return not isinstance(to_grade, str) or not to_grade
 
 
 def _parse_action(

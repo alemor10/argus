@@ -74,6 +74,13 @@ src/argus/
 │   ├── edgar.py         # SEC companyfacts — fundamentals cross-check; covers() excludes
 │                        #   OTC ADRs and ETFs (stub in skeleton)
 │   └── finnhub.py       # Finnhub free tier — price cross-check only (stub in skeleton)
+├── scout/
+│   ├── __init__.py      # discovery: finds candidates; the human decides
+│   ├── screener.py      # Screener Protocol + TradingViewScreener (unofficial feed,
+│   │                    #   one-module blast radius; ScreenerRow, ScreenerError)
+│   ├── criteria.py      # PURE screen rules: ScoutCriteria (scout.yaml), screen(), ranking
+│   └── run.py           # orchestration: scan → screen → engine(kind='scout') →
+│                        #   post-enrichment eligibility → scout_candidates → digest
 └── store/
     ├── __init__.py
     ├── schema.sql       # full DDL, single source of truth
@@ -540,11 +547,63 @@ the point.
 | First-run analyst history is baseline, not news | Emit every first-seen action | The feed hands over its full dated history on a ticker's first run (1,100 lines observed live); suppressed then, set-membership from the next run on. |
 | Delivery failure exits 1 (unlike partial data, which exits 0) | Treat any produced digest as success | Partial data still reaches the reader with its degradation disclosed; a failed delivery sink on a headless box means the reader gets NOTHING — that is the silent-failure class this tool exists to prevent. The file copy still lands and the error names it. |
 
+## Scout (discovery) — v1.1
+
+Scout finds candidates; the human decides. Weekly flow:
+
+1. **Universe** — the TradingView scanner endpoint (unofficial, accepted in
+   the same eyes-open way as yfinance: one-module blast radius behind a
+   `Screener` protocol in `scout/screener.py`; EODHD/Finviz slot in later).
+   One POST, server-side pre-filter: common stocks, market-cap and
+   average-volume floors. Screener values are ONLY a candidate filter —
+   they are never persisted as observations and never appear as data in a
+   digest; every reported number comes from the v1 fetch→gate stack.
+2. **Screen** — pure local rules over the screener rows (`scout/criteria.py`),
+   loaded from `scout.yaml`: PEG-style growth-adjusted valuation (never
+   naive low-P/E), margin floors, leverage ceiling, growth minimums, and a
+   value-trap exclusion (cheap + shrinking is not cheap). Passers ranked
+   (PEG ascending), watchlist members excluded, capped to `top_n`.
+3. **Enrich + gate** — the surviving candidates become `TickerContext`s and
+   run through the SAME engine (`runs.kind='scout'`) with the monitor's
+   gates plus scout's stricter eligibility: a candidate whose core fields
+   (price, P/E or PEG, margins) are missing or quarantined is EXCLUDED from
+   the proposal list, with the reason shown — unknown names skew
+   thinner-data, and scout proposes only clean ones. The diff phase is
+   skipped for scout runs (candidate sets churn weekly; diffing them is
+   noise — continuity is carried by streaks instead).
+4. **Report** — a scout digest (same sinks): proposals table with OUR gated
+   values + the screener's pass-reasons labeled as screener claims, a
+   consecutive-appearance streak per name ("3rd week on the list" — from
+   `scout_candidates` history), an exclusions section (data-quality drops),
+   and data health. A screener outage produces a digest that says so —
+   silence is a statement here too.
+5. **Promote** — `argus promote TICKER --thesis "..."` appends to
+   `watchlist.yaml`: human-invoked only, thesis mandatory (writing the
+   thesis IS the decision), refuses duplicates. The scheduled path can
+   never call it.
+
+`scout_candidates` (event-shaped, follows the analyst_actions precedent):
+
+```sql
+CREATE TABLE scout_candidates (
+    run_id           INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker           TEXT    NOT NULL,
+    rank             INTEGER NOT NULL,           -- position after ranking
+    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded')),
+    exclusion_reason TEXT,                       -- NULL iff proposed
+    screen_reasons   TEXT    NOT NULL,           -- JSON: which rules passed, with values
+    screener_metrics TEXT    NOT NULL,           -- JSON: raw screener row (labeled claims)
+    PRIMARY KEY (run_id, ticker),
+    CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
+) WITHOUT ROWID;
+```
+
 ## Post-v1 seams (built), and where extensions land
 
-- **scout** → constructs its own `list[TickerContext]` from a paid screener
-  feed and calls the same `engine.run(...)`; stricter gates = a second
-  `GateProfile` value; `runs.kind='scout'` already in the schema.
+- **scout** → BUILT (v1.1, above): constructs its own `list[TickerContext]`
+  from the screener feed and calls the same `engine.run(...)` with scout's
+  stricter eligibility; a paid feed (EODHD) remains a one-module swap behind
+  the `Screener` protocol.
 - **New/replacement data source (EODHD etc.)** → one new module in
   `sources/` implementing the Protocol + a priority entry; `corroborated_by`
   and the store contract tests are the migration insurance.

@@ -95,6 +95,23 @@ CREATE TABLE analyst_actions (
     PRIMARY KEY (ticker, action_date, firm, to_grade)
 ) WITHOUT ROWID;
 
+-- Scout candidates per run (event-shaped, like analyst_actions): which names
+-- the screen surfaced, how they ranked, and whether enrichment+gates kept
+-- them (proposed) or dropped them (excluded, with the reason). Streaks are
+-- derived by walking prior scout runs. Screener numbers live only here, as
+-- labeled claims — never in observations.
+CREATE TABLE scout_candidates (
+    run_id           INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker           TEXT    NOT NULL,
+    rank             INTEGER NOT NULL,
+    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded')),
+    exclusion_reason TEXT,
+    screen_reasons   TEXT    NOT NULL,   -- JSON {rule: "peg 0.82 <= 1.5", ...}
+    screener_metrics TEXT    NOT NULL,   -- JSON raw screener row (labeled claims)
+    PRIMARY KEY (run_id, ticker),
+    CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
+) WITHOUT ROWID;
+
 -- Emitted events, persisted so `argus report --run N` regenerates any digest
 -- exactly and the digest never re-derives differently from what was reported.
 CREATE TABLE change_events (

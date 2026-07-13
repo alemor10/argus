@@ -16,6 +16,7 @@ from pydantic import BaseModel, ConfigDict, Field as PydanticField
 from argus.models import Thresholds, TickerContext
 
 DEFAULT_WATCHLIST = "watchlist.yaml"
+DEFAULT_SCOUT = "scout.yaml"
 DEFAULT_DB = "argus.db"
 DEFAULT_REPORTS = "reports"
 
@@ -24,6 +25,7 @@ DEFAULT_REPORTS = "reports"
 class Paths:
     root: Path
     watchlist: Path
+    scout: Path
     db: Path
     reports: Path
 
@@ -32,6 +34,7 @@ def resolve_paths(
     root: Path | None = None,
     *,
     watchlist: Path | None = None,
+    scout: Path | None = None,
     db: Path | None = None,
     reports: Path | None = None,
 ) -> Paths:
@@ -40,6 +43,7 @@ def resolve_paths(
     return Paths(
         root=base,
         watchlist=(watchlist or base / DEFAULT_WATCHLIST).resolve(),
+        scout=(scout or base / DEFAULT_SCOUT).resolve(),
         db=(db or base / DEFAULT_DB).resolve(),
         reports=(reports or base / DEFAULT_REPORTS).resolve(),
     )
@@ -61,7 +65,13 @@ class WatchConfig(BaseModel):
 
 
 def load_watch_config(path: Path) -> WatchConfig:
-    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return load_watch_config_text(path.read_text(encoding="utf-8"))
+
+
+def load_watch_config_text(text: str) -> WatchConfig:
+    """Parse watchlist YAML from a string — promote validates its edit
+    round-trips BEFORE writing the file."""
+    raw = yaml.safe_load(text) or {}
     return WatchConfig.model_validate(raw)
 
 

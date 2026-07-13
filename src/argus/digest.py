@@ -69,14 +69,24 @@ def render(report: RunReport) -> str:
         golden tests byte-compare the output.
     """
     tickers = sorted(report.tickers, key=lambda t: t.context.ticker)
-    sections = (
-        _header(report),
-        _changes_section(tickers),
-        _watchlist_section(tickers),
-        _quarantine_section(tickers),
-        _health_section(tickers),
-        _footer(report),
-    )
+    if report.kind == "scout":
+        sections = (
+            _header(report),
+            _proposals_section(report),
+            _scout_exclusions_section(report),
+            _quarantine_section(tickers),
+            _health_section(tickers),
+            _scout_footer(report),
+        )
+    else:
+        sections = (
+            _header(report),
+            _changes_section(tickers),
+            _watchlist_section(tickers),
+            _quarantine_section(tickers),
+            _health_section(tickers),
+            _footer(report),
+        )
     return "\n\n".join("\n".join(_trimmed(section)) for section in sections) + "\n"
 
 
@@ -94,7 +104,81 @@ def _header(report: RunReport) -> list[str]:
         )
     else:
         lines.append("Status: FAILED — this run produced no usable data.")
+    if report.notes:
+        lines += ["", f"**Note:** {report.notes}"]
     return lines
+
+
+# --- Scout sections ----------------------------------------------------------
+
+
+def _proposals_section(report: RunReport) -> list[str]:
+    """The shortlist. Every number in the table is OUR gated value from the
+    enrichment snapshots; the screener's numbers appear only in the
+    screen-reasons column, labeled as claims."""
+    proposed = [p for p in report.scout if p.status == "proposed"]
+    lines = ["## Proposals", ""]
+    if not report.scout and report.status == "failed":
+        # An outage is not a verdict: "evaluated nothing" must never read as
+        # "nothing passed" — those are different statements.
+        lines.append("No candidates were evaluated this run — see the note above.")
+        return lines
+    if not proposed:
+        # Silence is a statement: no survivors is information.
+        lines.append("No candidates passed the screen and the quality gates this run.")
+        return lines
+    snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
+    lines += [
+        "| # | Ticker | Streak | Price | PEG | Fwd P/E | Gross margin | Op margin | D/E |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+    ]
+    for p in proposed:
+        snapshot = snapshots.get(p.ticker)
+        values = snapshot.values if snapshot is not None else {}
+
+        def cell(field: Field) -> str:
+            fv = values.get(field)
+            return _fmt_value(field, fv.value) if fv is not None else "—"
+
+        streak = f"{p.streak}w" if p.streak > 1 else "new"
+        lines.append(
+            f"| {p.rank} | {p.ticker} | {streak} | {cell(Field.PRICE)} | {cell(Field.PEG)} "
+            f"| {cell(Field.PE_FWD)} | {cell(Field.GROSS_MARGIN)} "
+            f"| {cell(Field.OPERATING_MARGIN)} | {cell(Field.DEBT_TO_EQUITY)} |"
+        )
+    lines.append("")
+    lines.append("Screen (screener claims, verified independently above):")
+    for p in proposed:
+        lines.append(f"- **{p.ticker}** — {_cell('; '.join(p.screen_reasons.values()))}")
+    return lines
+
+
+def _scout_exclusions_section(report: RunReport) -> list[str]:
+    excluded = [p for p in report.scout if p.status == "excluded"]
+    if not excluded:
+        return ["No screen survivors were excluded by the quality gates."]
+    lines = ["## Excluded after enrichment", ""]
+    lines += [
+        f"- {p.ticker} (screen rank {p.rank}): {p.exclusion_reason}" for p in excluded
+    ]
+    lines.append("")
+    lines.append(
+        "_Exclusion is a data-quality verdict, not an investment one — these "
+        "names passed the screen but their fundamentals could not be verified "
+        "cleanly this run._"
+    )
+    return lines
+
+
+def _scout_footer(report: RunReport) -> list[str]:
+    return [
+        "---",
+        "",
+        "Argus proposes; the human decides. To start watching a name: "
+        "`argus promote TICKER --thesis \"why you believe it\"`.",
+        "",
+        f"Run {report.run_id} — regenerate with `argus report --run {report.run_id}`.",
+    ]
 
 
 def _changes_section(tickers: Sequence[TickerReport]) -> list[str]:

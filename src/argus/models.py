@@ -347,6 +347,33 @@ class TickerReport(BaseModel):
     error: str | None = None
 
 
+class ScoutCandidateRecord(BaseModel):
+    """Write-side scout row: one screened candidate's fate this run.
+    Screener numbers ride along as labeled claims only."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    rank: int
+    status: Literal["proposed", "excluded"]
+    exclusion_reason: str | None = None
+    screen_reasons: dict[str, str]
+    screener_metrics: dict[str, float | str | None]
+
+    @model_validator(mode="after")
+    def _reason_iff_excluded(self) -> "ScoutCandidateRecord":
+        if (self.status == "excluded") != (self.exclusion_reason is not None):
+            raise ValueError("exclusion_reason must be set iff excluded")
+        return self
+
+
+class ScoutProposal(ScoutCandidateRecord):
+    """Report-side scout row: the record plus its derived streak —
+    consecutive scout runs (up to and including this one) it was proposed."""
+
+    streak: int = 0
+
+
 class RunReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -354,4 +381,6 @@ class RunReport(BaseModel):
     kind: Literal["watch", "scout"]
     as_of: AwareDatetime
     status: Literal["complete", "partial", "failed"]
+    notes: str | None = None  # e.g. "screener unavailable: …" — rendered in the header
     tickers: tuple[TickerReport, ...] = ()
+    scout: tuple[ScoutProposal, ...] = ()  # populated for kind='scout' only

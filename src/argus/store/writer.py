@@ -26,6 +26,7 @@ from argus.models import (
     ChangeEvent,
     GatedObservation,
     ParseFailure,
+    ScoutCandidateRecord,
     SourceHealth,
     TickerContext,
     require_aware,
@@ -175,18 +176,44 @@ def record_events(
             )
 
 
+def write_scout_candidates(
+    con: sqlite3.Connection, *, run_id: int, records: Sequence[ScoutCandidateRecord]
+) -> None:
+    """One transaction: every screened candidate's fate this run — proposed
+    or excluded-with-reason. Screener metrics persist as labeled claims."""
+    with con:
+        for record in records:
+            con.execute(
+                """INSERT INTO scout_candidates
+                     (run_id, ticker, rank, status, exclusion_reason,
+                      screen_reasons, screener_metrics)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    record.ticker,
+                    record.rank,
+                    record.status,
+                    record.exclusion_reason,
+                    json.dumps(record.screen_reasons),
+                    json.dumps(record.screener_metrics),
+                ),
+            )
+
+
 def finish_run(
     con: sqlite3.Connection,
     *,
     run_id: int,
     status: Literal["complete", "partial", "failed"],
     finished_at: datetime,
+    notes: str | None = None,
 ) -> None:
     require_aware(finished_at)
     with con:
         con.execute(
-            "UPDATE runs SET status = ?, finished_at = ? WHERE run_id = ?",
-            (status, finished_at.isoformat(), run_id),
+            "UPDATE runs SET status = ?, finished_at = ?, notes = COALESCE(?, notes) "
+            "WHERE run_id = ?",
+            (status, finished_at.isoformat(), notes, run_id),
         )
 
 

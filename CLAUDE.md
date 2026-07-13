@@ -66,7 +66,15 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 | ETF full holdings (look-through) | SEC N-PORT filings | Free, monthly, all holdings with CUSIPs (VOO = 519 entries verified). Pain is trust→series→ticker mapping + CUSIP→ticker join (OpenFIGI free API). |
 | Bulk fundamentals (discovery) | **Paid — decision deferred to discovery phase** | Screening a universe from Yahoo is rate-limit-abusive and fragile — don't. Researched options (July 2026 prices): |
 
-### Discovery data decision (make when discovery work starts, not before)
+### Discovery data decision — DECIDED 2026-07-13: free screener path
+
+Scout v1.1 ships on the **TradingView scanner endpoint** (free, unofficial —
+accepted in the same eyes-open way as yfinance, behind a `Screener` protocol;
+verified working from the deployment box with all needed columns incl. PEG).
+Screener values only *select* candidates; everything reported is re-fetched
+and gated by the v1 stack. The paid options below remain the upgrade path
+(EODHD most likely) if/when the free endpoint breaks or discovery needs
+global/OTC coverage. Original research preserved for that day:
 
 Three viable paths, all reusing the v1 engine to enrich + quality-gate the shortlist:
 

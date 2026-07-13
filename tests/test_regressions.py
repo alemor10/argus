@@ -84,7 +84,10 @@ def test_one_malformed_analyst_row_cannot_destroy_the_ticker(con):
     payload = {
         "info": {"currentPrice": 181.25, "recommendationKey": "buy"},
         "upgrades_downgrades": [
-            {"GradeDate": None, "Firm": None, "ToGrade": None, "Action": None},  # NaN row
+            # A grade action (has ToGrade) that is still unreadable: NaN firm,
+            # no date. (Rows WITHOUT a ToGrade are out-of-scope shapes, not
+            # malformed — see yahoo._is_out_of_scope_row.)
+            {"GradeDate": None, "Firm": None, "ToGrade": "Buy", "Action": None},
             {
                 "GradeDate": "2026-07-12T00:00:00",
                 "Firm": "Morgan Stanley",
