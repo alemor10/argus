@@ -25,6 +25,7 @@ class Field(StrEnum):
     PEG = "peg"
     GROSS_MARGIN = "gross_margin"
     OPERATING_MARGIN = "operating_margin"
+    ROE = "roe"
     DEBT_TO_EQUITY = "debt_to_equity"
     NEXT_EARNINGS_DATE = "next_earnings_date"
     ANALYST_RATING = "analyst_rating"
@@ -93,6 +94,10 @@ SPECS: dict[Field, FieldSpec] = {
         bounds=(-10.0, 1.01),
         cross_source_rel_tol=_FUNDAMENTAL_TOL,
         priority=(Source.YAHOO, Source.EDGAR),
+    ),
+    Field.ROE: FieldSpec(
+        "num",
+        bounds=(-100.0, 100.0),  # a fraction; extreme leverage makes wild ROEs real
     ),
     Field.DEBT_TO_EQUITY: FieldSpec(
         "num",

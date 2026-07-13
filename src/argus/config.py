@@ -110,6 +110,11 @@ def resolve_secrets() -> Secrets:
     )
 
 
+def pdf_enabled() -> bool:
+    """PDF report attachment, on by default; ARGUS_PDF=0 turns it off."""
+    return os.environ.get("ARGUS_PDF", "1").strip().lower() not in ("0", "false", "no")
+
+
 def resolve_discord_webhook() -> str | None:
     """ARGUS_DISCORD_WEBHOOK turns Discord delivery on. A single value —
     nothing to half-configure."""

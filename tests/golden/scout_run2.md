@@ -4,17 +4,17 @@ Status: PARTIAL — some tickers or sources failed this run; degradation is deta
 
 ## Proposals
 
-| # | Ticker | Streak | Price | PEG | Fwd P/E | Gross margin | Op margin | D/E |
+| # | Ticker | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | CLEANCO | 2w | 100.00 | 0.92 | — | 55.0% | — | — |
+| 1 | CLEANCO | 2w | 100.00 | 14.80 | 55.0% | — | — | — |
 
 Screen (screener claims, verified independently above):
-- **CLEANCO** — peg 0.9 <= 1.5; gross_margin 55 >= 30; operating_margin 20 >= 8; eps_growth 25 >= 10; revenue_growth 15 >= 5; debt_to_equity 0.4 <= 1.5; eps_growth 25 > 0 and revenue_growth 15 > 0
+- **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30%
 
 ## Excluded after enrichment
 
-- THINCO (screen rank 2): core fields not verifiable — missing: P/E or PEG, margins
-- DEADCO (screen rank 3): fetch failed: yahoo: HTTP 502 from upstream
+- DEADCO (screen rank 2): fetch failed: yahoo: HTTP 502 from upstream
+- THINCO (screen rank 3): core fields not verifiable — missing: forward or trailing P/E, margins
 
 _Exclusion is a data-quality verdict, not an investment one — these names passed the screen but their fundamentals could not be verified cleanly this run._
 

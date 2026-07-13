@@ -1,6 +1,8 @@
-"""Scout screening rules: rule-by-rule boundaries, None-fails-rule, the
-value-trap exclusion, watchlist exclusion, deterministic ranking, top_n cap,
-and strict scout.yaml loading."""
+"""Scout screening rules (Quality-GARP forward): rule-by-rule boundaries,
+None-fails-rule, the value-trap guard at exactly -30, humanized reason
+strings pinned verbatim, watchlist exclusion (incl. the dotted/dashed
+class-share regression), deterministic forward-PEG ranking, top_n cap, and
+strict scout.yaml loading."""
 
 import json
 from pathlib import Path
@@ -17,11 +19,11 @@ from argus.scout.criteria import (
 from argus.scout.screener import ScreenerRow
 
 RULE_ORDER = [
-    "peg",
+    "forward_pe",
+    "revenue_growth",
     "gross_margin",
     "operating_margin",
-    "eps_growth",
-    "revenue_growth",
+    "roe",
     "debt_to_equity",
     "value_trap",
 ]
@@ -32,12 +34,13 @@ _GOOD = {
     "exchange": "NASDAQ",
     "market_cap": 5e10,
     "avg_volume_30d": 5e6,
-    "peg_ttm": 1.0,
-    "gross_margin_pct": 45.0,
-    "operating_margin_pct": 20.0,
-    "eps_growth_ttm_pct": 15.0,
-    "revenue_growth_ttm_pct": 10.0,
+    "fwd_pe": 18.0,
+    "revenue_growth_ttm_pct": 15.0,
+    "gross_margin_pct": 55.0,
+    "operating_margin_pct": 25.0,
+    "roe_pct": 30.0,
     "debt_to_equity": 0.5,
+    "eps_growth_ttm_pct": 12.0,
 }
 
 
@@ -55,7 +58,8 @@ def screen_one(row: ScreenerRow, **criteria_overrides) -> list[ScreenedCandidate
     return screen([row], ScoutCriteria(**criteria_overrides), exclude=frozenset())
 
 
-# --- rule boundaries (floors and ceilings are inclusive; peg > 0 is strict)
+# --- rule boundaries (floors and ceilings inclusive; fwd_pe > 0 strict;
+#     value trap STRICTLY above max_eps_decline_pct)
 
 
 def test_good_row_passes_every_rule():
@@ -67,27 +71,32 @@ def test_good_row_passes_every_rule():
 @pytest.mark.parametrize(
     ("overrides", "passes"),
     [
-        # peg: 0 < peg <= max_peg; ceiling inclusive, zero and negative fail
-        ({"peg_ttm": 1.5}, True),
-        ({"peg_ttm": 1.5000001}, False),
-        ({"peg_ttm": 0.01}, True),
-        ({"peg_ttm": 0.0}, False),
-        ({"peg_ttm": -0.5}, False),  # negative PEG is meaningless, never a bargain
+        # forward P/E: 0 < fwd_pe <= max_forward_pe; ceiling inclusive
+        ({"fwd_pe": 25.0}, True),
+        ({"fwd_pe": 25.0000001}, False),
+        ({"fwd_pe": 0.1}, True),
+        ({"fwd_pe": 0.0}, False),
+        ({"fwd_pe": -8.0}, False),  # negative fwd P/E = expected losses, never cheap
+        # revenue growth: floor inclusive
+        ({"revenue_growth_ttm_pct": 10.0}, True),
+        ({"revenue_growth_ttm_pct": 9.999}, False),
         # margins: floor inclusive
-        ({"gross_margin_pct": 30.0}, True),
-        ({"gross_margin_pct": 29.999}, False),
-        ({"operating_margin_pct": 8.0}, True),
-        ({"operating_margin_pct": 7.999}, False),
-        # growth: floor inclusive
-        ({"eps_growth_ttm_pct": 10.0}, True),
-        ({"eps_growth_ttm_pct": 9.999}, False),
-        ({"revenue_growth_ttm_pct": 5.0}, True),
-        ({"revenue_growth_ttm_pct": 4.999}, False),
+        ({"gross_margin_pct": 40.0}, True),
+        ({"gross_margin_pct": 39.999}, False),
+        ({"operating_margin_pct": 12.0}, True),
+        ({"operating_margin_pct": 11.999}, False),
+        # ROE: floor inclusive
+        ({"roe_pct": 15.0}, True),
+        ({"roe_pct": 14.999}, False),
         # debt/equity: 0 <= d/e <= ceiling, both ends inclusive
-        ({"debt_to_equity": 1.5}, True),
-        ({"debt_to_equity": 1.5000001}, False),
+        ({"debt_to_equity": 1.0}, True),
+        ({"debt_to_equity": 1.0000001}, False),
         ({"debt_to_equity": 0.0}, True),
         ({"debt_to_equity": -0.01}, False),  # negative equity is not low leverage
+        # value trap: strictly above -30; the boundary itself fails
+        ({"eps_growth_ttm_pct": -29.999}, True),
+        ({"eps_growth_ttm_pct": -30.0}, False),
+        ({"eps_growth_ttm_pct": -30.001}, False),
     ],
 )
 def test_rule_boundaries(overrides, passes):
@@ -97,12 +106,13 @@ def test_rule_boundaries(overrides, passes):
 @pytest.mark.parametrize(
     "metric",
     [
-        "peg_ttm",
+        "fwd_pe",
+        "revenue_growth_ttm_pct",
         "gross_margin_pct",
         "operating_margin_pct",
-        "eps_growth_ttm_pct",
-        "revenue_growth_ttm_pct",
+        "roe_pct",
         "debt_to_equity",
+        "eps_growth_ttm_pct",  # value-trap input: thin data is not a pass
     ],
 )
 def test_none_metric_fails_its_rule(metric):
@@ -111,41 +121,63 @@ def test_none_metric_fails_its_rule(metric):
 
 
 def test_one_failing_rule_drops_the_row_entirely():
-    rows = [make_row(ticker="FAIL", peg_ttm=2.0), make_row(ticker="PASS")]
+    rows = [make_row(ticker="FAIL", fwd_pe=30.0), make_row(ticker="PASS")]
     candidates = screen(rows, ScoutCriteria(), exclude=frozenset())
     assert [c.row.ticker for c in candidates] == ["PASS"]
 
 
-# --- value trap: growth must be strictly positive regardless of the floors
+# --- value trap: growing revenue with collapsing earnings is a
+#     margin-compression trap, not a bargain
 
 
-def test_value_trap_catches_cheap_and_shrinking_despite_lenient_floors():
-    """A config with negative growth floors lets a shrinking name pass the
-    floor rules; the value-trap rule still kills it — cheap + shrinking is
-    not cheap."""
-    shrinking = make_row(peg_ttm=0.4, eps_growth_ttm_pct=-5.0, revenue_growth_ttm_pct=-2.0)
-    assert screen_one(shrinking, min_eps_growth_pct=-50.0, min_revenue_growth_pct=-50.0) == []
+def test_value_trap_kills_growing_revenue_with_collapsing_earnings():
+    trap = make_row(revenue_growth_ttm_pct=25.0, eps_growth_ttm_pct=-45.0)
+    assert screen_one(trap) == []
 
 
-@pytest.mark.parametrize("metric", ["eps_growth_ttm_pct", "revenue_growth_ttm_pct"])
-def test_value_trap_zero_growth_fails_even_when_floor_is_zero(metric):
-    row = make_row(**{metric: 0.0})
-    assert screen_one(row, min_eps_growth_pct=0.0, min_revenue_growth_pct=0.0) == []
+def test_mild_eps_decline_is_not_a_trap():
+    """-30% guards against collapse; it is NOT a growth floor. A name with a
+    modestly negative TTM EPS trend but strong forward economics stays in —
+    TTM-EPS-growth requirements were the OLD strategy."""
+    (candidate,) = screen_one(make_row(eps_growth_ttm_pct=-10.0))
+    assert candidate.reasons["value_trap"] == "EPS trend -10.0% > -30%"
 
 
-def test_value_trap_reason_present_on_passers():
-    (candidate,) = screen_one(make_row())
-    assert candidate.reasons["value_trap"] == "eps_growth 15 > 0 and revenue_growth 10 > 0"
+# --- reasons: humanized, one decimal for values, %g for thresholds,
+#     fixed order, JSON-serializable
 
 
-# --- reasons: actual values, fixed order, JSON-serializable
+def test_reason_strings_are_humanized_verbatim():
+    row = make_row(
+        fwd_pe=20.4,
+        revenue_growth_ttm_pct=70.7,
+        gross_margin_pct=74.1,
+        operating_margin_pct=65.7,
+        roe_pct=114.3,
+        debt_to_equity=0.06,
+        eps_growth_ttm_pct=697.3,
+    )
+    (candidate,) = screen_one(row)
+    assert candidate.reasons == {
+        "forward_pe": "fwd P/E 20.4 ≤ 25",
+        "revenue_growth": "rev growth +70.7% ≥ 10%",
+        "gross_margin": "gross margin 74.1% ≥ 40%",
+        "operating_margin": "op margin 65.7% ≥ 12%",
+        "roe": "ROE 114.3% ≥ 15%",
+        "debt_to_equity": "D/E 0.06 ≤ 1",
+        "value_trap": "EPS trend +697.3% > -30%",
+    }
 
 
-def test_reasons_carry_actual_values():
-    (candidate,) = screen_one(make_row(peg_ttm=0.82))
-    assert candidate.reasons["peg"] == "peg 0.82 <= 1.5"
-    assert candidate.reasons["gross_margin"] == "gross_margin 45 >= 30"
-    assert candidate.reasons["debt_to_equity"] == "debt_to_equity 0.5 <= 1.5"
+def test_values_render_one_decimal_and_thresholds_compact():
+    """No 0.0632668 noise: values get exactly one decimal (D/E two — it
+    lives in the 0.0x range), thresholds render compactly via %g."""
+    (candidate,) = screen_one(
+        make_row(fwd_pe=20.0, revenue_growth_ttm_pct=12.345678), max_forward_pe=22.5
+    )
+    assert candidate.reasons["forward_pe"] == "fwd P/E 20.0 ≤ 22.5"
+    assert candidate.reasons["revenue_growth"] == "rev growth +12.3% ≥ 10%"
+    assert candidate.reasons["debt_to_equity"] == "D/E 0.50 ≤ 1"
 
 
 def test_reasons_are_json_serializable_and_ordered():
@@ -173,24 +205,25 @@ def test_exclusion_bridges_dotted_and_dashed_class_shares():
 
 def test_excluded_rows_do_not_consume_ranks_or_top_n_slots():
     rows = [
-        make_row(ticker="HELD", peg_ttm=0.1),  # would rank first if not held
-        make_row(ticker="AAA", peg_ttm=0.5),
-        make_row(ticker="BBB", peg_ttm=0.9),
+        make_row(ticker="HELD", fwd_pe=5.0),  # would rank first if not held
+        make_row(ticker="AAA", fwd_pe=12.0),
+        make_row(ticker="BBB", fwd_pe=18.0),
     ]
     candidates = screen(rows, ScoutCriteria(top_n=2), exclude={"held"})
     assert [(c.row.ticker, c.rank) for c in candidates] == [("AAA", 1), ("BBB", 2)]
 
 
-# --- ranking: PEG asc, market cap desc, ticker alpha; deterministic
+# --- ranking: forward-PEG (fwd_pe / revenue growth) asc, market cap desc,
+#     ticker alpha; deterministic
 
 
-def test_ranking_peg_ascending_with_tiebreaks():
+def test_ranking_forward_peg_ascending_with_tiebreaks():
     rows = [
-        make_row(ticker="ZZZ", peg_ttm=0.9, market_cap=1e10),
-        make_row(ticker="BIG", peg_ttm=1.2, market_cap=9e10),
-        make_row(ticker="SML", peg_ttm=1.2, market_cap=3e9),  # peg tie → cap desc
-        make_row(ticker="BBB", peg_ttm=1.2, market_cap=9e10),  # full tie → alpha
-        make_row(ticker="AAA", peg_ttm=1.4, market_cap=9e11),
+        make_row(ticker="ZZZ", fwd_pe=10.0, revenue_growth_ttm_pct=20.0),  # 0.5
+        make_row(ticker="BIG", fwd_pe=24.0, revenue_growth_ttm_pct=20.0, market_cap=9e10),  # 1.2
+        make_row(ticker="SML", fwd_pe=24.0, revenue_growth_ttm_pct=20.0, market_cap=3e9),  # tie → cap desc
+        make_row(ticker="BBB", fwd_pe=24.0, revenue_growth_ttm_pct=20.0, market_cap=9e10),  # full tie → alpha
+        make_row(ticker="AAA", fwd_pe=21.0, revenue_growth_ttm_pct=15.0, market_cap=9e11),  # 1.4
     ]
     candidates = screen(rows, ScoutCriteria(), exclude=frozenset())
     assert [(c.row.ticker, c.rank) for c in candidates] == [
@@ -202,11 +235,22 @@ def test_ranking_peg_ascending_with_tiebreaks():
     ]
 
 
+def test_ranking_is_growth_adjusted_not_naive_low_pe():
+    """A higher multiple with much faster growth outranks a nominally
+    cheaper slow grower — forward-PEG, the point of GARP."""
+    rows = [
+        make_row(ticker="SLOW", fwd_pe=12.0, revenue_growth_ttm_pct=10.0),  # 1.2
+        make_row(ticker="FAST", fwd_pe=24.0, revenue_growth_ttm_pct=60.0),  # 0.4
+    ]
+    candidates = screen(rows, ScoutCriteria(), exclude=frozenset())
+    assert [c.row.ticker for c in candidates] == ["FAST", "SLOW"]
+
+
 def test_ranking_is_input_order_independent():
     rows = [
-        make_row(ticker="ZZZ", peg_ttm=0.9),
-        make_row(ticker="BBB", peg_ttm=1.2),
-        make_row(ticker="AAA", peg_ttm=1.2),
+        make_row(ticker="ZZZ", fwd_pe=10.0),
+        make_row(ticker="BBB", fwd_pe=18.0),
+        make_row(ticker="AAA", fwd_pe=18.0),
     ]
     forward = screen(rows, ScoutCriteria(), exclude=frozenset())
     backward = screen(list(reversed(rows)), ScoutCriteria(), exclude=frozenset())
@@ -214,8 +258,25 @@ def test_ranking_is_input_order_independent():
     assert [c.row.ticker for c in forward] == ["ZZZ", "AAA", "BBB"]
 
 
+def test_shrinking_passer_under_permissive_floor_ranks_last_not_first():
+    """Defensive: every passer has positive revenue growth under the default
+    floors, but a permissive config (negative floor) can admit a shrinker —
+    naive division would hand it a NEGATIVE forward-PEG and first place. It
+    pins to the bottom instead."""
+    rows = [
+        make_row(ticker="SHRK", fwd_pe=5.0, revenue_growth_ttm_pct=-5.0),
+        make_row(ticker="ZERO", fwd_pe=1.0, revenue_growth_ttm_pct=0.0),
+        make_row(ticker="GROW", fwd_pe=20.0, revenue_growth_ttm_pct=20.0),
+    ]
+    candidates = screen(rows, ScoutCriteria(min_revenue_growth_pct=-50.0), exclude=frozenset())
+    assert [c.row.ticker for c in candidates] == ["GROW", "SHRK", "ZERO"]
+
+
 def test_top_n_caps_after_ranking():
-    rows = [make_row(ticker=f"T{i:02d}", peg_ttm=0.5 + i / 100) for i in range(20)]
+    rows = [
+        make_row(ticker=f"T{i:02d}", fwd_pe=10.0 + i / 2, revenue_growth_ttm_pct=20.0)
+        for i in range(20)
+    ]
     candidates = screen(rows, ScoutCriteria(top_n=3), exclude=frozenset())
     assert [(c.row.ticker, c.rank) for c in candidates] == [
         ("T00", 1),
@@ -230,7 +291,10 @@ def test_top_n_caps_after_ranking():
 def test_missing_file_yields_defaults(tmp_path):
     criteria = load_scout_criteria(tmp_path / "scout.yaml")
     assert criteria == ScoutCriteria()
-    assert criteria.max_peg == 1.5
+    assert criteria.max_forward_pe == 25.0
+    assert criteria.min_revenue_growth_pct == 10.0
+    assert criteria.min_roe_pct == 15.0
+    assert criteria.max_eps_decline_pct == -30.0
     assert criteria.top_n == 15
 
 
@@ -242,16 +306,26 @@ def test_empty_file_yields_defaults(tmp_path):
 
 def test_present_file_overrides_only_named_keys(tmp_path):
     path = tmp_path / "scout.yaml"
-    path.write_text("max_peg: 1.2\ntop_n: 5\n", encoding="utf-8")
+    path.write_text("max_forward_pe: 22.0\ntop_n: 5\n", encoding="utf-8")
     criteria = load_scout_criteria(path)
-    assert criteria.max_peg == 1.2
+    assert criteria.max_forward_pe == 22.0
     assert criteria.top_n == 5
-    assert criteria.min_gross_margin_pct == 30.0  # untouched default
+    assert criteria.min_gross_margin_pct == 40.0  # untouched default
 
 
 def test_typoed_yaml_key_fails_loudly(tmp_path):
     path = tmp_path / "scout.yaml"
-    path.write_text("max_pge: 1.2\n", encoding="utf-8")  # typo
+    path.write_text("max_forward_pge: 22.0\n", encoding="utf-8")  # typo
+    with pytest.raises(ValidationError):
+        load_scout_criteria(path)
+
+
+@pytest.mark.parametrize("old_key", ["max_peg", "min_eps_growth_pct"])
+def test_old_ttm_garp_strategy_keys_fail_loudly(tmp_path, old_key):
+    """A scout.yaml left over from the TTM-GARP strategy must error, not
+    silently screen with new-strategy defaults in its place."""
+    path = tmp_path / "scout.yaml"
+    path.write_text(f"{old_key}: 1.5\n", encoding="utf-8")
     with pytest.raises(ValidationError):
         load_scout_criteria(path)
 
@@ -259,4 +333,4 @@ def test_typoed_yaml_key_fails_loudly(tmp_path):
 def test_criteria_model_is_frozen():
     criteria = ScoutCriteria()
     with pytest.raises(ValidationError):
-        criteria.max_peg = 9.9
+        criteria.max_forward_pe = 9.9

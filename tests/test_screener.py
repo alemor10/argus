@@ -39,6 +39,9 @@ _POS = {
     "operating_margin": 10,
     "debt_to_equity": 11,
     "avg_volume": 12,
+    "fwd_pe": 13,
+    "roe": 14,
+    "fcf_margin": 15,
 }
 
 GARBAGE_BODIES = (
@@ -59,7 +62,7 @@ def entry(s="NYSE:TEST", **overrides):
     by the column names in _POS."""
     d = [
         "TEST", "Test Corp", "Finance", 10.0, 5_000_000_000.0, 15.0, 1.2,
-        8.0, 5.0, 40.0, 20.0, 0.5, 1_000_000.0,
+        8.0, 5.0, 40.0, 20.0, 0.5, 1_000_000.0, 12.5, 18.0, 15.0,
     ]
     for key, value in overrides.items():
         d[_POS[key]] = value
@@ -108,7 +111,10 @@ class TestParseFixture:
         assert nvda.gross_margin_pct == pytest.approx(74.1454331711974)
         assert nvda.operating_margin_pct == pytest.approx(64.0200243795638)
         assert nvda.debt_to_equity == pytest.approx(0.0655534751424742)
-        assert nvda.avg_volume_30d == pytest.approx(159485889.8333334)
+        assert nvda.avg_volume_30d == pytest.approx(159516837.10000005)
+        assert nvda.fwd_pe == pytest.approx(20.44827259165906)
+        assert nvda.roe_pct == pytest.approx(114.288066963343)
+        assert nvda.fcf_margin_pct == pytest.approx(46.97444879699871)
 
     def test_ticker_is_the_bare_symbol_not_the_company_name(self, rows):
         """TV's "name" column is the SYMBOL; the company name is
@@ -132,6 +138,8 @@ class TestParseFixture:
         nvda = by_ticker(rows)["NVDA"]
         assert nvda.gross_margin_pct > 1.01  # a fraction could never say 74
         assert nvda.eps_growth_ttm_pct == pytest.approx(110.333, abs=0.001)
+        assert nvda.roe_pct > 1.01  # 114.29 means 114.29%, not 1.14x
+        assert nvda.fcf_margin_pct > 1.01  # 46.97 means 46.97%
 
     def test_null_metrics_become_none_fields(self, rows):
         """Real nulls from the recorded response: banks report no gross
@@ -145,6 +153,18 @@ class TestParseFixture:
         assert tickers["JPM"].gross_margin_pct is None
         assert tickers["JPM"].operating_margin_pct is not None
         assert tickers["SNDK"].eps_growth_ttm_pct is None
+
+    def test_null_quality_garp_metrics_become_none_fields(self, rows):
+        """Real nulls in the three appended columns: pre-profit RVMD has no
+        forward-P/E estimate and no FCF margin; ABBV's negative book equity
+        nulls its return_on_equity (alongside its null debt_to_equity)."""
+        tickers = by_ticker(rows)
+        assert tickers["RVMD"].fwd_pe is None
+        assert tickers["RVMD"].fcf_margin_pct is None
+        assert tickers["RVMD"].roe_pct is not None  # neighbors unharmed
+        assert tickers["ABBV"].roe_pct is None
+        assert tickers["ABBV"].fwd_pe is not None
+        assert tickers["ABBV"].fcf_margin_pct is not None
 
     def test_rows_are_frozen(self, rows):
         with pytest.raises(ValidationError):
@@ -190,13 +210,19 @@ class TestParseFailureModes:
         assert screener.last_skipped == 1
 
     def test_wrong_length_d_is_skipped_even_when_symbol_slot_reads(self):
-        """One extra slot means the column contract shifted for that row —
-        every index after the shift would be silently wrong."""
-        thirteen = entry()
-        fourteen = {"s": "NYSE:TEST", "d": thirteen["d"] + [99.9]}
+        """One slot off in either direction means the column contract shifted
+        for that row — every index after the shift would be silently wrong.
+        Exactly 16 (the 13 originals + the three Quality-GARP columns) parses."""
+        sixteen = entry()
+        assert len(sixteen["d"]) == 16
+        seventeen = {"s": "NYSE:TEST", "d": sixteen["d"] + [99.9]}
+        fifteen = {"s": "NYSE:TEST", "d": sixteen["d"][:-1]}
+        thirteen = {"s": "NYSE:TEST", "d": sixteen["d"][:13]}  # the pre-1.2 shape
         screener = TradingViewScreener()
-        assert screener.parse(payload(fourteen)) == []
-        assert screener.last_skipped == 1
+        assert screener.parse(payload(seventeen, fifteen, thirteen)) == []
+        assert screener.last_skipped == 3
+        assert len(screener.parse(payload(sixteen))) == 1
+        assert screener.last_skipped == 0
 
     def test_last_skipped_resets_on_every_parse(self):
         screener = TradingViewScreener()
@@ -213,6 +239,9 @@ class TestParseFailureModes:
             ({"pe": {"v": 1}}, "pe_ttm"),
             ({"peg": float("nan")}, "peg_ttm"),  # json.loads admits NaN
             ({"debt_to_equity": float("inf")}, "debt_to_equity"),
+            ({"fwd_pe": "20.4"}, "fwd_pe"),
+            ({"roe": True}, "roe_pct"),
+            ({"fcf_margin": float("nan")}, "fcf_margin_pct"),
         ],
     )
     def test_unreadable_metric_becomes_none_not_a_crash(self, override, attr):
@@ -270,7 +299,17 @@ class TestScan:
         assert body["sort"] == {"sortBy": "market_cap_basic", "sortOrder": "desc"}
         assert body["range"] == [0, 8000]
         assert body["columns"][0] == "name"
-        assert len(body["columns"]) == 13
+        assert len(body["columns"]) == 16
+        # The Quality-GARP columns ride at the END — the fixture's d arrays
+        # are index-mapped, so column order IS the wire contract.
+        assert body["columns"][13:] == [
+            "price_earnings_fwd",
+            "return_on_equity",
+            "free_cash_flow_margin_ttm",
+        ]
+        # The similarly-named identifier that exists but returns null must
+        # never sneak in: it would silently None every fwd_pe.
+        assert "price_earnings_forward" not in body["columns"]
 
     def test_wholesale_failure_retries_once_then_raises_screener_error(self, monkeypatch):
         calls = []
@@ -334,6 +373,9 @@ class TestScreenerRow:
         assert row.company is None
         assert row.pe_ttm is None
         assert row.avg_volume_30d is None
+        assert row.fwd_pe is None
+        assert row.roe_pct is None
+        assert row.fcf_margin_pct is None
 
     def test_frozen(self):
         row = ScreenerRow(ticker="NVDA", exchange="NASDAQ")

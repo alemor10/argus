@@ -18,7 +18,8 @@ tests/fixtures/tradingview/):
 
 - One POST to /america/scan; the body names filters, columns, sort, range.
   `range: [0, 8000]` covers any plausible filtered universe in a single
-  request — 1,517 rows came back at a $2B-cap / 500k-volume floor.
+  request — ~1,515 rows came back at a $2B-cap / 500k-volume floor (both
+  the 13-column and the 16-column recordings).
 - Each result row is `{"s": "EXCHANGE:SYMBOL", "d": [...]}` with `d` ordered
   exactly as the requested columns. The `name` column is the bare SYMBOL
   (company name lives under `description`); exchange comes from the `s`
@@ -60,6 +61,12 @@ _COLUMNS: tuple[str, ...] = (
     "operating_margin_ttm",  # percent
     "debt_to_equity",
     "average_volume_30d_calc",
+    # Quality-GARP columns (appended 2026-07-13, all verified live).
+    # "price_earnings_fwd" is the populated forward-P/E identifier;
+    # "price_earnings_forward" also exists but returns null — do not use it.
+    "price_earnings_fwd",
+    "return_on_equity",  # percent (NVDA reported 114.29)
+    "free_cash_flow_margin_ttm",  # percent
 )
 _IDX = {column: i for i, column in enumerate(_COLUMNS)}
 
@@ -91,6 +98,9 @@ class ScreenerRow(BaseModel):
     operating_margin_pct: float | None = None  # percent
     debt_to_equity: float | None = None
     avg_volume_30d: float | None = None
+    fwd_pe: float | None = None
+    roe_pct: float | None = None  # percent
+    fcf_margin_pct: float | None = None  # percent
 
 
 @runtime_checkable
@@ -219,6 +229,9 @@ def _parse_row(entry: Any) -> ScreenerRow | None:
         operating_margin_pct=_num(d[_IDX["operating_margin_ttm"]]),
         debt_to_equity=_num(d[_IDX["debt_to_equity"]]),
         avg_volume_30d=_num(d[_IDX["average_volume_30d_calc"]]),
+        fwd_pe=_num(d[_IDX["price_earnings_fwd"]]),
+        roe_pct=_num(d[_IDX["return_on_equity"]]),
+        fcf_margin_pct=_num(d[_IDX["free_cash_flow_margin_ttm"]]),
     )
 
 

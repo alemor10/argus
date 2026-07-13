@@ -100,7 +100,7 @@ def test_one_malformed_analyst_row_cannot_destroy_the_ticker(con):
     }
     result = YahooSource().parse(payload, "NVDA", NOW)
     assert len(result.parse_failures) == 1  # aggregated, not one per bad row
-    assert "1 malformed" in result.parse_failures[0].raw
+    assert "1 unreadable" in result.parse_failures[0].raw
 
     outcome = _run(con, [CTX], [_Stub(result)])
     assert outcome.status == "complete"

@@ -26,7 +26,7 @@ RUN1_AT = datetime(2026, 7, 6, 15, 0, tzinfo=UTC)
 RUN2_AT = datetime(2026, 7, 13, 15, 0, tzinfo=UTC)
 
 
-def _row(ticker, peg=0.9, **overrides):
+def _row(ticker, fwd_pe=15.0, **overrides):
     kwargs = dict(
         ticker=ticker,
         exchange="NASDAQ",
@@ -35,7 +35,8 @@ def _row(ticker, peg=0.9, **overrides):
         close=100.0,
         market_cap=5e9,
         pe_ttm=18.0,
-        peg_ttm=peg,
+        fwd_pe=fwd_pe,
+        roe_pct=25.0,
         eps_growth_ttm_pct=25.0,
         revenue_growth_ttm_pct=15.0,
         gross_margin_pct=55.0,
@@ -85,7 +86,7 @@ class _StubSource:
                     source=Source.YAHOO, fetched_at=self._fetched_at,
                 ),
                 RawObservation(
-                    ticker=ticker, field=Field.PEG, value_num=0.92,
+                    ticker=ticker, field=Field.PE_FWD, value_num=14.8,
                     source=Source.YAHOO, fetched_at=self._fetched_at,
                 ),
                 RawObservation(
@@ -144,23 +145,19 @@ class TestScoutRun:
         verdicts = {r["ticker"]: (r["status"], r["exclusion_reason"]) for r in rows}
         assert verdicts["CLEANCO"] == ("proposed", None)
         assert verdicts["THINCO"][0] == "excluded"
-        assert "P/E or PEG" in verdicts["THINCO"][1]
+        assert "forward or trailing P/E" in verdicts["THINCO"][1]
         assert verdicts["DEADCO"][0] == "excluded"
         assert "fetch failed" in verdicts["DEADCO"][1]
 
-    def test_verified_peg_over_ceiling_excludes(self, con):
-        """The first live run's INCY case: screener claims PEG 0.008, our
-        gated value says 11.99 — the verified number wins and the digest
-        shows both."""
-
-        class _RichPegSource(_StubSource):
+    def _scout_with_fwd_pe(self, con, verified_fwd_pe, claimed_fwd_pe):
+        class _FwdPeSource(_StubSource):
             def fetch(self, ticker):
                 result = super().fetch(ticker)
                 observations = tuple(
-                    o for o in result.observations if o.field is not Field.PEG
+                    o for o in result.observations if o.field is not Field.PE_FWD
                 ) + (
                     RawObservation(
-                        ticker=ticker, field=Field.PEG, value_num=11.99,
+                        ticker=ticker, field=Field.PE_FWD, value_num=verified_fwd_pe,
                         source=Source.YAHOO, fetched_at=self._fetched_at,
                     ),
                 )
@@ -169,9 +166,9 @@ class TestScoutRun:
         sink = _CaptureSink()
         outcome = run_scout(
             con=con,
-            screener=_StubScreener(rows=[_row("CLEANCO", peg=0.008)]),
+            screener=_StubScreener(rows=[_row("CLEANCO", fwd_pe=claimed_fwd_pe)]),
             criteria=ScoutCriteria(top_n=10),
-            sources=[_RichPegSource(RUN1_AT)],
+            sources=[_FwdPeSource(RUN1_AT)],
             profile=DEFAULT_PROFILE,
             sink=sink,
             as_of=RUN1_AT,
@@ -179,49 +176,23 @@ class TestScoutRun:
             app_version="scout-test",
             exclude=set(),
         )
-        row = con.execute(
+        return con.execute(
             "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
             (outcome.run_id,),
         ).fetchone()
+
+    def test_verified_fwd_pe_over_ceiling_excludes(self, con):
+        """The INCY divergence class: screener claims fwd P/E 12, our gated
+        value says 61.5 — the verified number wins and the digest shows both."""
+        row = self._scout_with_fwd_pe(con, verified_fwd_pe=61.5, claimed_fwd_pe=12.0)
         assert row["status"] == "excluded"
-        assert "verified PEG 11.99" in row["exclusion_reason"]
-        assert "0.008" in row["exclusion_reason"]  # the screener's claim, named
+        assert "verified fwd P/E 61.5" in row["exclusion_reason"]
+        assert "12.0" in row["exclusion_reason"]  # the screener's claim, named
 
-    def test_verified_negative_peg_also_excludes(self, con):
-        """Review finding: the ceiling-only check let a verified PEG of -3.4
-        (negative earnings growth) through — 'zero or negative is meaningless,
-        never a bargain' applies to verified values too."""
-
-        class _NegativePegSource(_StubSource):
-            def fetch(self, ticker):
-                result = super().fetch(ticker)
-                observations = tuple(
-                    o for o in result.observations if o.field is not Field.PEG
-                ) + (
-                    RawObservation(
-                        ticker=ticker, field=Field.PEG, value_num=-3.4,
-                        source=Source.YAHOO, fetched_at=self._fetched_at,
-                    ),
-                )
-                return FetchResult(observations=observations)
-
-        sink = _CaptureSink()
-        outcome = run_scout(
-            con=con,
-            screener=_StubScreener(rows=[_row("CLEANCO", peg=0.9)]),
-            criteria=ScoutCriteria(top_n=10),
-            sources=[_NegativePegSource(RUN1_AT)],
-            profile=DEFAULT_PROFILE,
-            sink=sink,
-            as_of=RUN1_AT,
-            today=RUN1_AT.date(),
-            app_version="scout-test",
-            exclude=set(),
-        )
-        row = con.execute(
-            "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
-            (outcome.run_id,),
-        ).fetchone()
+    def test_verified_negative_fwd_pe_also_excludes(self, con):
+        """The mirror case: a verified negative forward P/E means expected
+        losses — outside the screen's valuation window, never a bargain."""
+        row = self._scout_with_fwd_pe(con, verified_fwd_pe=-8.2, claimed_fwd_pe=14.0)
         assert row["status"] == "excluded"
         assert "zero or negative" in row["exclusion_reason"]
 

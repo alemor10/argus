@@ -1,5 +1,14 @@
 """Scout step 2 — PURE screening and ranking rules over screener rows.
 
+Strategy: Quality-GARP, forward-looking. The first live screen ranked on
+TTM-EPS-growth GARP and surfaced base-effect recovery cyclicals — miners at
+"+697% EPS growth" off a collapsed prior year. Trailing EPS growth is where
+the base effect lives, so the screen asks what is being paid for what comes
+NEXT: forward P/E against revenue growth, with quality floors (ROE, margins,
+leverage ceiling) doing the work naive-cheap screens skip. TTM EPS growth
+survives only as a value-trap guard — growing revenue with collapsing
+earnings is a margin-compression trap, not a bargain.
+
 Screener values are only ever a candidate filter: nothing here is persisted
 or reported as data — every number in a scout digest comes from the v1
 fetch→gate stack, which re-verifies each survivor. That is also why a None
@@ -10,8 +19,9 @@ The market-cap and average-volume floors live in ScoutCriteria because the
 orchestrating layer passes them to the screener's scan() — they are applied
 server-side and deliberately NOT re-applied here.
 
-No IO, no clock. Ranking is fully deterministic: PEG ascending, market cap
-descending on ties, ticker alphabetical last.
+No IO, no clock. Ranking is fully deterministic: forward-PEG (fwd P/E per
+point of revenue growth) ascending, market cap descending on ties, ticker
+alphabetical last.
 """
 
 from collections.abc import Sequence
@@ -29,19 +39,22 @@ class ScoutCriteria(BaseModel):
 
     Frozen + extra="forbid": a typo'd yaml key must error loudly, never
     silently screen with a default in its place (config is the fail-loudly
-    boundary, same policy as Thresholds).
+    boundary, same policy as Thresholds). The forbid also retires the old
+    TTM-GARP strategy honestly — a leftover `max_peg`/`min_eps_growth_pct`
+    key errors instead of silently screening with the new rules.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     min_market_cap: float = 2e9  # applied server-side by the screener
     min_avg_volume: float = 1_000_000  # applied server-side by the screener
-    max_peg: float = 1.5
-    min_gross_margin_pct: float = 30.0
-    min_operating_margin_pct: float = 8.0
-    min_eps_growth_pct: float = 10.0
-    min_revenue_growth_pct: float = 5.0
-    max_debt_to_equity: float = 1.5
+    max_forward_pe: float = 25.0
+    min_revenue_growth_pct: float = 10.0
+    min_gross_margin_pct: float = 40.0
+    min_operating_margin_pct: float = 12.0
+    min_roe_pct: float = 15.0
+    max_debt_to_equity: float = 1.0
+    max_eps_decline_pct: float = -30.0  # value-trap guard: TTM EPS trend must stay above
     top_n: int = 15
 
 
@@ -78,9 +91,10 @@ def screen(
       symbol) is dropped before any rule runs — scout never proposes names
       already held.
     - A row passes only if EVERY rule passes; a None metric fails its rule.
-    - Passers are ranked PEG ascending (growth-adjusted cheapness first),
-      market cap descending on ties, then ticker alphabetical, and the list
-      is capped to criteria.top_n.
+    - Passers are ranked forward-PEG ascending (fwd P/E over revenue growth
+      — cheap FOR ITS GROWTH first, never naive low-P/E), market cap
+      descending on ties, then ticker alphabetical, and the list is capped
+      to criteria.top_n.
     """
     excluded = {_bare_symbol(ticker) for ticker in exclude}
     passers: list[tuple[ScreenerRow, dict[str, str]]] = []
@@ -102,24 +116,34 @@ def _pass_reasons(row: ScreenerRow, criteria: ScoutCriteria) -> dict[str, str] |
     every rule passes, None on the first failure — pass/fail is all-or-nothing,
     so partial reasons are never observable."""
     checks: tuple[tuple[str, str | None], ...] = (
-        ("peg", _peg(row.peg_ttm, criteria.max_peg)),
+        ("forward_pe", _forward_pe(row.fwd_pe, criteria.max_forward_pe)),
+        (
+            "revenue_growth",
+            _pct_floor(
+                "rev growth",
+                row.revenue_growth_ttm_pct,
+                criteria.min_revenue_growth_pct,
+                signed=True,
+            ),
+        ),
         (
             "gross_margin",
-            _floor("gross_margin", row.gross_margin_pct, criteria.min_gross_margin_pct),
+            _pct_floor(
+                "gross margin", row.gross_margin_pct, criteria.min_gross_margin_pct, signed=False
+            ),
         ),
         (
             "operating_margin",
-            _floor(
-                "operating_margin", row.operating_margin_pct, criteria.min_operating_margin_pct
+            _pct_floor(
+                "op margin",
+                row.operating_margin_pct,
+                criteria.min_operating_margin_pct,
+                signed=False,
             ),
         ),
-        ("eps_growth", _floor("eps_growth", row.eps_growth_ttm_pct, criteria.min_eps_growth_pct)),
-        (
-            "revenue_growth",
-            _floor("revenue_growth", row.revenue_growth_ttm_pct, criteria.min_revenue_growth_pct),
-        ),
+        ("roe", _pct_floor("ROE", row.roe_pct, criteria.min_roe_pct, signed=False)),
         ("debt_to_equity", _leverage(row.debt_to_equity, criteria.max_debt_to_equity)),
-        ("value_trap", _value_trap(row.eps_growth_ttm_pct, row.revenue_growth_ttm_pct)),
+        ("value_trap", _value_trap(row.eps_growth_ttm_pct, criteria.max_eps_decline_pct)),
     )
     reasons: dict[str, str] = {}
     for rule, reason in checks:
@@ -129,45 +153,60 @@ def _pass_reasons(row: ScreenerRow, criteria: ScoutCriteria) -> dict[str, str] |
     return reasons
 
 
-def _peg(value: float | None, ceiling: float) -> str | None:
-    """Present and 0 < peg <= ceiling. A zero or negative PEG is meaningless
-    (negative growth or negative earnings behind it), never a bargain."""
+def _forward_pe(value: float | None, ceiling: float) -> str | None:
+    """Present and 0 < fwd P/E <= ceiling. A zero or negative forward P/E
+    means expected losses — never cheap, whatever the multiple says."""
     if value is None or not (0 < value <= ceiling):
         return None
-    return f"peg {_fmt(value)} <= {_fmt(ceiling)}"
+    return f"fwd P/E {value:.1f} ≤ {_fmt(ceiling)}"
 
 
-def _floor(rule: str, value: float | None, floor: float) -> str | None:
+def _pct_floor(label: str, value: float | None, floor: float, *, signed: bool) -> str | None:
+    """Present and value >= floor, rendered '<label> 74.1% ≥ 40%'. Growth
+    lines render signed (+70.7% — direction is the story there); level
+    metrics (margins, ROE) render bare."""
     if value is None or value < floor:
         return None
-    return f"{rule} {_fmt(value)} >= {_fmt(floor)}"
+    rendered = f"{value:+.1f}" if signed else f"{value:.1f}"
+    return f"{label} {rendered}% ≥ {_fmt(floor)}%"
 
 
 def _leverage(value: float | None, ceiling: float) -> str | None:
-    """Present and 0 <= d/e <= ceiling. Negative debt/equity means negative
-    equity — a balance-sheet question mark, not low leverage."""
+    """Present and 0 <= D/E <= ceiling. Negative debt/equity means negative
+    equity — a balance-sheet question mark, not low leverage. Two decimals,
+    the one value not rendered at one: leverage lives in the 0.0x range,
+    where one decimal would erase the number ('D/E 0.06', not 'D/E 0.1')."""
     if value is None or not (0 <= value <= ceiling):
         return None
-    return f"debt_to_equity {_fmt(value)} <= {_fmt(ceiling)}"
+    return f"D/E {value:.2f} ≤ {_fmt(ceiling)}"
 
 
-def _value_trap(eps_growth: float | None, revenue_growth: float | None) -> str | None:
-    """Value-trap exclusion: both growth lines strictly positive, regardless
-    of the configured floors — cheap + shrinking is not cheap."""
-    if eps_growth is None or revenue_growth is None:
+def _value_trap(eps_growth: float | None, decline_floor: float) -> str | None:
+    """Value-trap guard: TTM EPS trend STRICTLY above the decline ceiling
+    (exactly at it fails). Growing revenue with collapsing earnings is a
+    margin-compression trap; None fails — thin data is not a pass."""
+    if eps_growth is None or eps_growth <= decline_floor:
         return None
-    if eps_growth <= 0 or revenue_growth <= 0:
-        return None
-    return f"eps_growth {_fmt(eps_growth)} > 0 and revenue_growth {_fmt(revenue_growth)} > 0"
+    return f"EPS trend {eps_growth:+.1f}% > {_fmt(decline_floor)}%"
 
 
 def _rank_key(row: ScreenerRow) -> tuple[float, float, str, str]:
-    """PEG ascending, market cap descending, ticker alphabetical (bare symbol,
-    then the full ticker string so ordering is total no matter what)."""
-    if row.peg_ttm is None:  # the peg rule guarantees presence for passers
-        raise AssertionError("unreachable: rows without a PEG never pass screening")
+    """Forward-PEG ascending, market cap descending, ticker alphabetical
+    (bare symbol, then the full ticker string so ordering is total no matter
+    what).
+
+    The rules guarantee fwd_pe > 0 for passers, and revenue growth is
+    positive under any sane floor — but a permissive config (negative
+    growth floor) could admit a shrinking passer, and naive division would
+    hand it a NEGATIVE forward-PEG and first place. Nonpositive growth pins
+    to the bottom instead.
+    """
+    if row.fwd_pe is None or row.revenue_growth_ttm_pct is None:
+        raise AssertionError("unreachable: rows without fwd P/E or revenue growth never pass")
+    growth = row.revenue_growth_ttm_pct
+    fwd_peg = row.fwd_pe / growth if growth > 0 else float("inf")
     market_cap = row.market_cap if row.market_cap is not None else float("-inf")
-    return (row.peg_ttm, -market_cap, _bare_symbol(row.ticker), row.ticker)
+    return (fwd_peg, -market_cap, _bare_symbol(row.ticker), row.ticker)
 
 
 def house_symbol(ticker: str) -> str:
@@ -182,5 +221,5 @@ _bare_symbol = house_symbol  # ranking/exclusion use the canonical form
 
 
 def _fmt(value: float) -> str:
-    """Compact, deterministic number rendering: 0.82 → '0.82', 30.0 → '30'."""
+    """Compact, deterministic threshold rendering: 25.0 → '25', 22.5 → '22.5'."""
     return format(value, "g")

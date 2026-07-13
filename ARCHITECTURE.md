@@ -76,6 +76,10 @@ src/argus/
 │   ├── edgar.py         # SEC companyfacts — fundamentals cross-check; covers() excludes
 │                        #   OTC ADRs and ETFs (stub in skeleton)
 │   └── finnhub.py       # Finnhub free tier — price cross-check only (stub in skeleton)
+├── report_pdf.py        # PDF report builder (matplotlib): summary page + one page
+│                        #   per proposal/ticker with a 1y chart (raw Yahoo history,
+│                        #   captioned UNGATED) beside gate-verified metric panels;
+│                        #   rides the sinks as an Attachment (ARGUS_PDF=0 disables)
 ├── scout/
 │   ├── __init__.py      # discovery: finds candidates; the human decides
 │   ├── screener.py      # Screener Protocol + TradingViewScreener (unofficial feed,
@@ -561,20 +565,25 @@ Scout finds candidates; the human decides. Weekly flow:
    they are never persisted as observations and never appear as data in a
    digest; every reported number comes from the v1 fetch→gate stack.
 2. **Screen** — pure local rules over the screener rows (`scout/criteria.py`),
-   loaded from `scout.yaml`: PEG-style growth-adjusted valuation (never
-   naive low-P/E), margin floors, leverage ceiling, growth minimums, and a
-   value-trap exclusion (cheap + shrinking is not cheap). Passers ranked
-   (PEG ascending), watchlist members excluded, capped to `top_n`.
+   loaded from `scout.yaml`. Strategy: **Quality-GARP, forward-looking**
+   (chosen after the first live TTM-GARP screen surfaced base-effect
+   recovery cyclicals — miners at "+697% EPS growth"): forward P/E window,
+   revenue-growth floor (base-effect resistant), margin + ROE quality
+   floors, leverage ceiling, and a value-trap guard (revenue growing while
+   TTM EPS collapses is margin compression, not a bargain). Passers ranked
+   forward-PEG ascending (fwd P/E per point of revenue growth — cheap FOR
+   ITS GROWTH, never naive low-P/E), watchlist members excluded
+   (dot/dash-canonicalized), capped to `top_n`.
 3. **Enrich + gate** — the surviving candidates become `TickerContext`s and
    run through the SAME engine (`runs.kind='scout'`) with the monitor's
    gates plus scout's stricter eligibility: a candidate whose core fields
    (price, P/E or PEG, margins) are missing or quarantined is EXCLUDED from
    the proposal list, with the reason shown — unknown names skew
-   thinner-data, and scout proposes only clean ones. The VERIFIED PEG must
-   also honor the screen's own window (0 < peg ≤ ceiling): the first live
-   run surfaced a screener-claimed PEG of 0.008 that verified at 11.99
-   (base-effect TTM growth) — screener numbers nominate, gated numbers
-   decide, in both directions. The diff phase is
+   thinner-data, and scout proposes only clean ones. The VERIFIED forward
+   P/E must also honor the screen's own window (0 < fwd P/E ≤ ceiling):
+   the founding divergence case was a screener-claimed PEG of 0.008 that
+   verified at 11.99 — screener numbers nominate, gated numbers decide, in
+   both directions. The diff phase is
    skipped for scout runs (candidate sets churn weekly; diffing them is
    noise — continuity is carried by streaks instead).
 4. **Report** — a scout digest (same sinks): proposals table with OUR gated

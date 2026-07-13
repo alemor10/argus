@@ -10,7 +10,7 @@ normal delivery path, and marks the run failed in the store.
 """
 
 import sqlite3
-from collections.abc import Sequence, Set
+from collections.abc import Callable, Sequence, Set
 from datetime import date, datetime
 
 from argus import engine
@@ -36,6 +36,7 @@ def run_scout(
     today: date,
     app_version: str,
     exclude: Set[str],
+    artifact_builder: Callable[..., Sequence] | None = None,
 ) -> engine.RunOutcome:
     """One scout run. `exclude` is the current watchlist (already-watched
     names are never proposed). Screener values only select candidates —
@@ -82,6 +83,7 @@ def run_scout(
         app_version=app_version,
         kind="scout",
         before_digest=before_digest,
+        artifact_builder=artifact_builder,
     )
 
 
@@ -92,14 +94,16 @@ def _verdicts(
     criteria: ScoutCriteria,
 ) -> list[ScoutCandidateRecord]:
     """Post-enrichment eligibility, per ARCHITECTURE's core-fields rule
-    (price, P/E or PEG, margins — missing OR quarantined excludes), plus the
-    verified-PEG window: the first live run surfaced a name the screener
-    called PEG 0.008 that verified at 11.99 (base-effect TTM growth), and the
-    mirror case (verified PEG ≤ 0) is the same divergence class with the sign
-    flipped. Every exclusion reason is printed verbatim in the digest."""
+    (price, forward or trailing P/E, margins — missing OR quarantined
+    excludes), plus the verified-forward-P/E window: screener numbers
+    nominate, gated numbers decide. The founding case: a screener-claimed
+    PEG of 0.008 that verified at 11.99 (base-effect TTM growth) — the same
+    class of divergence applies to the forward P/E this strategy screens on,
+    in both directions (a negative verified fwd P/E means expected losses).
+    Every exclusion reason is printed verbatim in the digest."""
     core_fields = (
         Field.PRICE,
-        Field.PEG,
+        Field.PE_FWD,
         Field.PE_TTM,
         Field.GROSS_MARGIN,
         Field.OPERATING_MARGIN,
@@ -120,8 +124,8 @@ def _verdicts(
             missing = []
             if Field.PRICE not in snapshot.values:
                 missing.append("price")
-            if Field.PEG not in snapshot.values and Field.PE_TTM not in snapshot.values:
-                missing.append("P/E or PEG")
+            if Field.PE_FWD not in snapshot.values and Field.PE_TTM not in snapshot.values:
+                missing.append("forward or trailing P/E")
             if (
                 Field.GROSS_MARGIN not in snapshot.values
                 and Field.OPERATING_MARGIN not in snapshot.values
@@ -130,7 +134,7 @@ def _verdicts(
             quarantined = sorted(
                 field.value for field in core_fields if field in snapshot.quarantined
             )
-            verified_peg = snapshot.values.get(Field.PEG)
+            verified_fpe = snapshot.values.get(Field.PE_FWD)
             if missing or quarantined:
                 status = "excluded"
                 parts = []
@@ -139,21 +143,23 @@ def _verdicts(
                 if quarantined:
                     parts.append("quarantined: " + ", ".join(quarantined))
                 reason = "core fields not verifiable — " + "; ".join(parts)
-            elif verified_peg is not None and not (0 < verified_peg.value <= criteria.max_peg):
+            elif verified_fpe is not None and not (
+                0 < verified_fpe.value <= criteria.max_forward_pe
+            ):
                 status = "excluded"
-                claimed = candidate.row.peg_ttm
-                if verified_peg.value > criteria.max_peg:
+                claimed = candidate.row.fwd_pe
+                if verified_fpe.value > criteria.max_forward_pe:
                     reason = (
-                        f"verified PEG {verified_peg.value:.2f} exceeds the screen "
-                        f"ceiling {criteria.max_peg:g}"
+                        f"verified fwd P/E {verified_fpe.value:.1f} exceeds the screen "
+                        f"ceiling {criteria.max_forward_pe:g}"
                     )
                 else:
                     reason = (
-                        f"verified PEG {verified_peg.value:.2f} is zero or negative — "
-                        "meaningless per the screen's 0 < peg rule"
+                        f"verified fwd P/E {verified_fpe.value:.1f} is zero or negative — "
+                        "expected losses fail the screen's valuation window"
                     )
                 if claimed is not None:
-                    reason += f" (screener claimed {claimed:g})"
+                    reason += f" (screener claimed {claimed:.1f})"
         records.append(
             ScoutCandidateRecord(
                 ticker=ticker,

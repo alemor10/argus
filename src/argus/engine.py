@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Literal
 
 from argus import changes
-from argus.digest import DeliveryError, DigestSink, render
+from argus.digest import Attachment, DeliveryError, DigestSink, render
 from argus.gates import GateProfile, run_gates
 from argus.models import (
     AnalystActionRecord,
@@ -55,6 +55,9 @@ class RunOutcome:
     # digest_path. An undelivered digest is an unseen digest — the caller
     # must surface this and exit nonzero.
     delivery_error: str | None = None
+    # Set when the artifact builder (PDF report) failed: the digest still
+    # delivers without attachments — degraded, disclosed, never blocking.
+    attachment_error: str | None = None
 
 
 @dataclass
@@ -130,6 +133,7 @@ def run(
     app_version: str,
     kind: Literal["watch", "scout"] = "watch",
     before_digest: Callable[[sqlite3.Connection, int], None] | None = None,
+    artifact_builder: Callable[..., Sequence[Attachment]] | None = None,
 ) -> RunOutcome:
     """Execute one run. `as_of`/`today` are injected — nothing below the CLI
     reads the clock, which is what makes golden end-to-end tests exact.
@@ -234,13 +238,26 @@ def run(
 
     digest_path: Path | None = None
     delivery_error: str | None = None
+    attachment_error: str | None = None
     # Scout runs digest even when failed: the candidate verdicts persisted by
     # before_digest ("every fetch died" is a full page of exclusions) are
     # information, and the outage path already sets this precedent.
     if run_status != "failed" or kind == "scout":
         report = queries.run_report(con, run_id)
+        attachments: Sequence[Attachment] = ()
+        if artifact_builder is not None:
+            try:
+                attachments = tuple(artifact_builder(report))
+            except Exception as exc:  # attachments are optional; the digest is not
+                attachment_error = f"report attachment failed: {exc}"
+                writer.append_run_note(con, run_id=run_id, note=attachment_error)
         try:
-            digest_path = sink.write(render(report), run_id=run_id, as_of=as_of.date())
+            if attachments:
+                digest_path = sink.write(
+                    render(report), run_id=run_id, as_of=as_of.date(), attachments=attachments
+                )
+            else:
+                digest_path = sink.write(render(report), run_id=run_id, as_of=as_of.date())
         except DeliveryError as exc:  # rendered but (partly) undelivered — disclosed, not fatal
             digest_path = exc.digest_path
             delivery_error = str(exc)
@@ -250,4 +267,5 @@ def run(
         digest_path=digest_path,
         swept_run_ids=tuple(swept),
         delivery_error=delivery_error,
+        attachment_error=attachment_error,
     )

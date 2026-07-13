@@ -72,19 +72,20 @@ tickers: []
 """
 
 SCOUT_TEMPLATE = """\
-# Argus scout screening criteria — every value shown is the default; delete a
-# line to keep its default, edit to tune. Unknown keys are an error.
-# Market-cap / volume floors apply server-side at the screener; the rest are
-# local rules. See ARCHITECTURE.md, Scout.
+# Argus scout screening criteria — Quality-GARP, forward-looking. Every value
+# shown is the default; delete a line to keep its default, edit to tune.
+# Unknown keys are an error. Market-cap / volume floors apply server-side at
+# the screener; the rest are local rules. See ARCHITECTURE.md, Scout.
 
 min_market_cap: 2000000000    # $2B
 min_avg_volume: 1000000       # 30-day average shares/day
-max_peg: 1.5                  # growth-adjusted valuation ceiling (never naive low-P/E)
-min_gross_margin_pct: 30.0
-min_operating_margin_pct: 8.0
-min_eps_growth_pct: 10.0
-min_revenue_growth_pct: 5.0
-max_debt_to_equity: 1.5
+max_forward_pe: 25.0          # what you pay for what comes NEXT (never naive low-P/E)
+min_revenue_growth_pct: 10.0  # base-effect resistant, unlike TTM EPS growth
+min_gross_margin_pct: 40.0
+min_operating_margin_pct: 12.0
+min_roe_pct: 15.0             # quality floor: cheap must also be good
+max_debt_to_equity: 1.0
+max_eps_decline_pct: -30.0    # value-trap guard: revenue up + earnings collapsing = trap
 top_n: 15                     # shortlist size sent through enrichment + gates
 """
 
@@ -116,6 +117,33 @@ def _build_sinks(paths: Paths) -> DigestSink:
     return CompositeSink(*sinks)
 
 
+def _pdf_artifact_builder():
+    """The PDF report attachment (ARGUS_PDF=0 disables). Charts use raw
+    Yahoo history — ungated display data, captioned as such in the PDF;
+    every table number remains gate-verified. Returns None when disabled."""
+    from argus.config import pdf_enabled
+
+    if not pdf_enabled():
+        return None
+
+    def build(report):
+        from argus.digest import Attachment
+        from argus.report_pdf import build_pdf
+        from argus.sources.yahoo import fetch_history
+
+        if report.kind == "scout":
+            tickers = [p.ticker for p in report.scout if p.status == "proposed"]
+        else:
+            tickers = [t.context.ticker for t in report.tickers if t.status != "failed"]
+        history = {ticker: fetch_history(ticker) for ticker in tickers}
+        filename = (
+            f"argus-{report.kind}-{report.as_of.date().isoformat()}-run{report.run_id}.pdf"
+        )
+        return [Attachment(filename, build_pdf(report, history), "application/pdf")]
+
+    return build
+
+
 def _build_sources() -> list[DataSource]:
     secrets = resolve_secrets()
     sources: list[DataSource] = [YahooSource()]
@@ -141,6 +169,9 @@ def _exit_for(outcome: engine.RunOutcome) -> None:
             f"Note: run {swept} crashed before producing a digest — its detected "
             f"events are recoverable with `argus report --run {swept}`."
         )
+    if outcome.attachment_error is not None:
+        # Non-fatal: the digest still delivered; the PDF just didn't ride along.
+        typer.echo(f"Note: {outcome.attachment_error}", err=True)
     if outcome.delivery_error is not None:
         location = (
             f"written to {outcome.digest_path} but NOT delivered"
@@ -189,6 +220,7 @@ def watch(
             as_of=as_of,
             today=as_of.date(),
             app_version=argus.__version__,
+            artifact_builder=_pdf_artifact_builder(),
         )
     finally:
         con.close()
@@ -283,6 +315,7 @@ def scout(root: RootOpt = None) -> None:
             today=as_of.date(),
             app_version=argus.__version__,
             exclude=exclude,
+            artifact_builder=_pdf_artifact_builder(),
         )
     finally:
         con.close()

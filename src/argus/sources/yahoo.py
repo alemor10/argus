@@ -26,6 +26,7 @@ _NUM_FIELDS: tuple[tuple[str, Field, float], ...] = (
     ("trailingPegRatio", Field.PEG, 1.0),
     ("grossMargins", Field.GROSS_MARGIN, 1.0),
     ("operatingMargins", Field.OPERATING_MARGIN, 1.0),
+    ("returnOnEquity", Field.ROE, 1.0),  # fraction, like the margins
     ("debtToEquity", Field.DEBT_TO_EQUITY, 100.0),
     ("targetMeanPrice", Field.ANALYST_TARGET_MEAN, 1.0),
     ("numberOfAnalystOpinions", Field.ANALYST_COUNT, 1.0),
@@ -177,14 +178,14 @@ class YahooSource:
                 # Records the source sent but we could not read are evidence,
                 # not an absence (hard rule 2) — surfaced on ANALYST_RATING,
                 # the field the history belongs to. Aggregated into ONE
-                # failure: yfinance routinely yields a few NaN-firm rows in a
-                # multi-year feed, and one quarantine line carrying the count
-                # informs; hundreds would train the reader to skim.
+                # compact failure: a count plus a terse fingerprint informs;
+                # a raw dict dump (or hundreds of rows) trains the reader to
+                # skim the quarantine section.
                 failures.append(
                     _failure(
                         Field.ANALYST_RATING,
-                        f"{len(malformed)} malformed upgrades_downgrades record(s); "
-                        f"first: {malformed[0]!r}",
+                        f"{len(malformed)} unreadable analyst-history row(s), "
+                        f"e.g. {_fingerprint(malformed[0])}",
                         ticker,
                         fetched_at,
                     )
@@ -249,6 +250,18 @@ def _first_earnings_date(raw: Any) -> date | None:
     raise _UnreadableValue(str(raw))
 
 
+def _fingerprint(record: Any) -> str:
+    """A terse, human-scannable identity for an unreadable history row —
+    year + firm — instead of a raw dict dump in the quarantine table."""
+    if not isinstance(record, dict):
+        return f"a {type(record).__name__} row"
+    raw_date = record.get("GradeDate")
+    year = str(raw_date)[:4] if raw_date else "undated"
+    firm = record.get("Firm")
+    firm_text = firm if isinstance(firm, str) and firm else "unattributed"
+    return f"{year} row from {firm_text}"
+
+
 def _is_out_of_scope_row(record: Any) -> bool:
     """yfinance mixes shapes into upgrades_downgrades that are not grade
     actions: price-target-change rows, and old rows with no destination
@@ -303,3 +316,22 @@ def _grade_date(raw: Any) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def fetch_history(ticker: str, period: str = "1y") -> list[tuple[date, float]] | None:
+    """Daily closes for the PDF report's charts. UNGATED display data — it
+    never enters the store, and the PDF captions it as raw. None on any
+    failure: a chart is optional, the digest is not."""
+    try:
+        import yfinance as yf
+
+        frame = yf.Ticker(ticker).history(period=period, auto_adjust=True)
+        closes = frame["Close"]
+        points = [
+            (index.date(), float(value))
+            for index, value in closes.items()
+            if value == value  # NaN guard
+        ]
+        return points or None
+    except Exception:
+        return None

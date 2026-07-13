@@ -9,7 +9,7 @@ import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import NamedTuple, Protocol, runtime_checkable
 
 from argus.fields import SPECS, Field, Source
 from argus.models import (
@@ -37,6 +37,7 @@ _FIELD_LABELS: dict[Field, str] = {
     Field.PEG: "PEG",
     Field.GROSS_MARGIN: "Gross margin",
     Field.OPERATING_MARGIN: "Operating margin",
+    Field.ROE: "ROE",
     Field.DEBT_TO_EQUITY: "Debt/equity",
     Field.NEXT_EARNINGS_DATE: "Next earnings",
     Field.ANALYST_RATING: "Analyst rating",
@@ -129,10 +130,12 @@ def _proposals_section(report: RunReport) -> list[str]:
         return lines
     snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
     lines += [
-        "| # | Ticker | Streak | Price | PEG | Fwd P/E | Gross margin | Op margin | D/E |",
+        "| # | Ticker | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |",
         "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
-    for p in proposed:
+    # Display numbers are contiguous — exclusions must not leave holes in the
+    # shortlist (the screen rank survives in the exclusion lines).
+    for display_rank, p in enumerate(proposed, start=1):
         snapshot = snapshots.get(p.ticker)
         values = snapshot.values if snapshot is not None else {}
 
@@ -142,9 +145,9 @@ def _proposals_section(report: RunReport) -> list[str]:
 
         streak = f"{p.streak}w" if p.streak > 1 else "new"
         lines.append(
-            f"| {p.rank} | {_cell(p.ticker)} | {streak} | {cell(Field.PRICE)} | {cell(Field.PEG)} "
+            f"| {display_rank} | {_cell(p.ticker)} | {streak} | {cell(Field.PRICE)} "
             f"| {cell(Field.PE_FWD)} | {cell(Field.GROSS_MARGIN)} "
-            f"| {cell(Field.OPERATING_MARGIN)} | {cell(Field.DEBT_TO_EQUITY)} |"
+            f"| {cell(Field.OPERATING_MARGIN)} | {cell(Field.ROE)} | {cell(Field.DEBT_TO_EQUITY)} |"
         )
     lines.append("")
     lines.append("Screen (screener claims, verified independently above):")
@@ -377,7 +380,7 @@ def _field_line(field: Field, ticker: TickerReport) -> str:
 # points. Sub-threshold drift is information — quiet weeks should still show
 # which way things are leaning.
 _PCT_DRIFT_FIELDS = frozenset({Field.PRICE, Field.MARKET_CAP, Field.ANALYST_TARGET_MEAN})
-_PP_DRIFT_FIELDS = frozenset({Field.GROSS_MARGIN, Field.OPERATING_MARGIN})
+_PP_DRIFT_FIELDS = frozenset({Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE})
 
 
 def _drift_suffix(field: Field, value: float | str | date, baseline: Snapshot | None) -> str:
@@ -473,7 +476,7 @@ def _fmt_value(field: Field, value: float | str | date) -> str:
         return _humanize_cap(value)
     if field is Field.ANALYST_COUNT:
         return f"{value:.0f}"
-    if field in (Field.GROSS_MARGIN, Field.OPERATING_MARGIN):
+    if field in (Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE):
         return f"{value * 100:.1f}%"  # stored as a fraction; read as a percent
     return f"{value:.2f}"
 
@@ -494,22 +497,39 @@ def _trimmed(lines: list[str]) -> list[str]:
     return lines[start:end]
 
 
+class Attachment(NamedTuple):
+    """A binary artifact riding alongside the digest (e.g. the PDF report).
+    Attachments are additive: a sink that only knows markdown still works."""
+
+    filename: str
+    content: bytes
+    mime: str
+
+
 @runtime_checkable
 class DigestSink(Protocol):
     """Where a rendered digest goes. FileDigestSink ships in v1; email or
-    notification sinks are additional implementations, no engine changes."""
+    notification sinks are additional implementations, no engine changes.
+    The engine only passes `attachments` when there are any, so minimal
+    sinks (and test stubs) may omit the parameter entirely."""
 
-    def write(self, markdown: str, *, run_id: int, as_of: date) -> Path | None: ...
+    def write(
+        self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
+    ) -> Path | None: ...
 
 
 class FileDigestSink:
     def __init__(self, reports_dir: Path) -> None:
         self.reports_dir = reports_dir
 
-    def write(self, markdown: str, *, run_id: int, as_of: date) -> Path:
+    def write(
+        self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
+    ) -> Path:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         path = self.reports_dir / f"digest-{as_of.isoformat()}-run{run_id}.md"
         path.write_text(markdown, encoding="utf-8")
+        for attachment in attachments:
+            (self.reports_dir / attachment.filename).write_bytes(attachment.content)
         return path
 
 
@@ -537,7 +557,9 @@ class EmailDigestSink:
         self.sender = sender
         self.recipient = recipient
 
-    def write(self, markdown: str, *, run_id: int, as_of: date) -> None:
+    def write(
+        self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
+    ) -> None:
         import smtplib
         from email.message import EmailMessage
 
@@ -546,6 +568,14 @@ class EmailDigestSink:
         message["From"] = self.sender
         message["To"] = self.recipient
         message.set_content(markdown)
+        for attachment in attachments:
+            maintype, _, subtype = attachment.mime.partition("/")
+            message.add_attachment(
+                attachment.content,
+                maintype=maintype,
+                subtype=subtype or "octet-stream",
+                filename=attachment.filename,
+            )
 
         if self.port == 465:
             with smtplib.SMTP_SSL(self.host, self.port, timeout=30) as smtp:
@@ -570,24 +600,29 @@ class DiscordDigestSink:
     def __init__(self, webhook_url: str) -> None:
         self.webhook_url = webhook_url
 
-    def write(self, markdown: str, *, run_id: int, as_of: date) -> None:
+    def write(
+        self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
+    ) -> None:
         import httpx
 
         payload = {
             "content": _discord_headline(markdown),
             "allowed_mentions": {"parse": []},  # a digest must never ping anyone
         }
+        files = {
+            "files[0]": (
+                f"digest-{as_of.isoformat()}-run{run_id}.md",
+                markdown.encode("utf-8"),
+                "text/markdown",
+            )
+        }
+        for index, attachment in enumerate(attachments[:9], start=1):  # webhook cap: 10 files
+            files[f"files[{index}]"] = (attachment.filename, attachment.content, attachment.mime)
         response = httpx.post(
             self.webhook_url,
             data={"payload_json": json.dumps(payload)},
-            files={
-                "files[0]": (
-                    f"digest-{as_of.isoformat()}-run{run_id}.md",
-                    markdown.encode("utf-8"),
-                    "text/markdown",
-                )
-            },
-            timeout=30.0,
+            files=files,
+            timeout=60.0,
         )
         response.raise_for_status()
         return None
@@ -640,12 +675,19 @@ class CompositeSink:
     def __init__(self, *sinks: DigestSink) -> None:
         self.sinks = sinks
 
-    def write(self, markdown: str, *, run_id: int, as_of: date) -> Path | None:
+    def write(
+        self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
+    ) -> Path | None:
         path: Path | None = None
         failures: list[str] = []
         for sink in self.sinks:
             try:
-                result = sink.write(markdown, run_id=run_id, as_of=as_of)
+                if attachments:
+                    result = sink.write(
+                        markdown, run_id=run_id, as_of=as_of, attachments=attachments
+                    )
+                else:  # minimal sinks/test stubs may not accept the parameter
+                    result = sink.write(markdown, run_id=run_id, as_of=as_of)
             except Exception as exc:
                 failures.append(f"{type(sink).__name__}: {exc}")
                 continue
