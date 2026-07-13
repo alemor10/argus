@@ -22,6 +22,7 @@ from argus.models import (
     PriceMove,
     QuarantineHit,
     RunReport,
+    Snapshot,
     TargetMove,
     TickerReport,
 )
@@ -136,6 +137,11 @@ def _watchlist_section(tickers: Sequence[TickerReport]) -> list[str]:
     lines = ["## Watchlist", ""]
     for ticker in tickers:
         lines += [f"### {ticker.context.ticker}", ""]
+        if ticker.baseline is not None and ticker.snapshot is not None and ticker.snapshot.values:
+            # Names the drift window once per ticker (baselines are
+            # per-ticker, so it can differ across tickers after failures).
+            # Skipped when nothing this run has a value to drift.
+            lines += [f"_Δ vs {ticker.baseline.as_of.date().isoformat()}_", ""]
         if ticker.snapshot is None:
             # Never silently absent: a dead ticker is named, with its error.
             lines += [f"Fetch failed — no data this run ({ticker.error or 'unknown error'}).", ""]
@@ -270,11 +276,52 @@ def _field_line(field: Field, ticker: TickerReport) -> str:
     fv = snapshot.values.get(field)
     if fv is not None:
         marks = "".join(f" ✓{s.value}" for s in sorted(fv.corroborated_by))
-        return f"- {label}: {_fmt_value(field, fv.value)} ({fv.source.value}, {_ts(fv.fetched_at)}){marks}"
+        drift = _drift_suffix(field, fv.value, ticker.baseline)
+        return (
+            f"- {label}: {_fmt_value(field, fv.value)}{drift} "
+            f"({fv.source.value}, {_ts(fv.fetched_at)}){marks}"
+        )
     hits = snapshot.quarantined.get(field)
     if hits:
         return f"- {label}: ⚠ DATA QUARANTINED — {_details(hits)}"
     return f"- {label}: — no data ({_no_data_cause(field, ticker)})"
+
+
+# Scale-free fields drift in percent; ratios drift in absolute points;
+# margins (stored as fractions, rendered as percents) drift in percentage
+# points. Sub-threshold drift is information — quiet weeks should still show
+# which way things are leaning.
+_PCT_DRIFT_FIELDS = frozenset({Field.PRICE, Field.MARKET_CAP, Field.ANALYST_TARGET_MEAN})
+_PP_DRIFT_FIELDS = frozenset({Field.GROSS_MARGIN, Field.OPERATING_MARGIN})
+
+
+def _drift_suffix(field: Field, value: float | str | date, baseline: Snapshot | None) -> str:
+    """Run-over-run drift for a numeric watchlist line, e.g. ' (+6.6%)'.
+    Empty when there is no accepted baseline value for the field (first
+    sighting, prior quarantine/outage — the Changes section owns gap
+    stories) or when the drift rounds to zero (genuinely unchanged)."""
+    if baseline is None or not isinstance(value, (int, float)):
+        return ""
+    old = baseline.values.get(field)
+    if old is None or not isinstance(old.value, (int, float)):
+        return ""
+    if field in _PCT_DRIFT_FIELDS:
+        if old.value == 0:
+            return ""
+        rendered = f"{(value - old.value) / old.value * 100:+.1f}%"
+        zero = "+0.0%", "-0.0%"
+    elif field in _PP_DRIFT_FIELDS:
+        rendered = f"{(value - old.value) * 100:+.1f}pp"
+        zero = "+0.0pp", "-0.0pp"
+    elif field is Field.ANALYST_COUNT:
+        rendered = f"{value - old.value:+.0f}"
+        zero = ("+0", "-0")
+    else:  # P/E, PEG, debt/equity — absolute points
+        rendered = f"{value - old.value:+.2f}"
+        zero = "+0.00", "-0.00"
+    if rendered in zero:
+        return ""
+    return f" ({rendered})"
 
 
 def _no_data_cause(field: Field, ticker: TickerReport) -> str:

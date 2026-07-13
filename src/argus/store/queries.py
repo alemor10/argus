@@ -222,6 +222,7 @@ def _ticker_report(con: sqlite3.Connection, run_id: int, rt: sqlite3.Row) -> Tic
         ),
         status=rt["status"],
         snapshot=snapshot(con, run_id, ticker),
+        baseline=snapshot(con, baseline_id, ticker) if baseline_id is not None else None,
         events=events,
         quarantines=quarantines,
         sources=sources,

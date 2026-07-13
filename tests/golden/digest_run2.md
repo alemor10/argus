@@ -40,7 +40,9 @@ Fetch failures (no data this run): DEADCO (yahoo: HTTP 502 from upstream; finnhu
 
 ### NTDOY
 
-- Price: 10.97 (yahoo, 2026-07-13 14:00Z) ✓finnhub
+_Δ vs 2026-07-06_
+
+- Price: 10.97 (+0.6%) (yahoo, 2026-07-13 14:00Z) ✓finnhub
 - Market cap: — no data (not provided)
 - P/E (TTM): — no data (not provided)
 - Fwd P/E: — no data (not provided)
@@ -55,17 +57,19 @@ Fetch failures (no data this run): DEADCO (yahoo: HTTP 502 from upstream; finnhu
 
 ### NVDA
 
-- Price: 181.25 (yahoo, 2026-07-13 14:00Z)
+_Δ vs 2026-07-06_
+
+- Price: 181.25 (+6.6%) (yahoo, 2026-07-13 14:00Z)
 - Market cap: — no data (not provided)
 - P/E (TTM): — no data (not provided)
-- Fwd P/E: 31.20 (yahoo, 2026-07-13 14:00Z)
+- Fwd P/E: 31.20 (+1.40) (yahoo, 2026-07-13 14:00Z)
 - PEG: — no data (not provided)
 - Gross margin: — no data (not provided)
 - Operating margin: — no data (not provided)
 - Debt/equity: — no data (not provided)
 - Next earnings: 2026-07-17 (yahoo, 2026-07-13 14:00Z)
 - Analyst rating: hold (yahoo, 2026-07-13 14:00Z)
-- Analyst target (mean): 205.00 (yahoo, 2026-07-13 14:00Z)
+- Analyst target (mean): 205.00 (+2.5%) (yahoo, 2026-07-13 14:00Z)
 - Analyst count: — no data (not provided)
 
 ## Data quarantined

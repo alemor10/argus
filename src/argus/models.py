@@ -338,6 +338,7 @@ class TickerReport(BaseModel):
     context: TickerContext
     status: Literal["ok", "partial", "failed"]
     snapshot: Snapshot | None = None
+    baseline: Snapshot | None = None  # the diffed-against snapshot, for watchlist drift
     events: tuple[ChangeEvent, ...] = ()
     quarantines: tuple[QuarantinedObservation, ...] = ()  # EVERY quarantined obs this run
     sources: tuple[SourceHealth, ...] = ()
