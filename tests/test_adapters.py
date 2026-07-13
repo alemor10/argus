@@ -1,0 +1,367 @@
+"""Adapter parse()/covers() over recorded fixtures — never the network.
+
+Each adapter is a thin _fetch_raw() plus a pure parse(); everything here
+drives parse() with checked-in payloads, including the pathological real
+NTDOY capture. Adapters only normalize units and types — implausible values
+(the $35 target against a $10.97 price) MUST pass through as plain
+RawObservations for gates.py to judge; an adapter that pre-judges would hide
+the founding case from the quarantine machinery.
+
+A @pytest.mark.live smoke test per adapter exists but is excluded by default
+(pytest addopts) — CI must never depend on free feeds.
+"""
+
+import json
+import os
+from datetime import UTC, date, datetime
+from pathlib import Path
+
+import pytest
+
+from argus.fields import Field, Source
+from argus.sources import EdgarSource, FinnhubSource, YahooSource
+
+FIXTURES = Path(__file__).parent / "fixtures"
+FETCHED_AT = datetime(2026, 7, 13, 14, 0, tzinfo=UTC)
+
+GARBAGE_PAYLOADS = (
+    None,
+    [],
+    "not a dict",
+    42,
+    {"info": "not a dict", "calendar": 3, "upgrades_downgrades": "not a list",
+     "facts": "not a dict", "c": {}},
+)
+
+
+def load(relative: str):
+    return json.loads((FIXTURES / relative).read_text())
+
+
+def by_field(result):
+    """field → RawObservation; asserts one observation per field on the way."""
+    out = {}
+    for obs in result.observations:
+        assert obs.field not in out, f"duplicate observation for {obs.field}"
+        out[obs.field] = obs
+    return out
+
+
+# --- Yahoo ------------------------------------------------------------------
+
+
+@pytest.fixture()
+def ntdoy_payload():
+    return load("yahoo/NTDOY-2026-07-12.json")
+
+
+@pytest.fixture()
+def ntdoy_result(ntdoy_payload):
+    return YahooSource().parse(ntdoy_payload, "NTDOY", FETCHED_AT)
+
+
+class TestYahooParse:
+    def test_pathological_ntdoy_passes_through_unjudged(self, ntdoy_result):
+        """The founding case: the adapter must NOT quarantine — it has no
+        verdict to give. Both legs reach gates.py as plain observations."""
+        values = by_field(ntdoy_result)
+        assert values[Field.PRICE].value_num == pytest.approx(10.97)
+        assert values[Field.ANALYST_TARGET_MEAN].value_num == pytest.approx(35.0)
+        assert ntdoy_result.parse_failures == ()
+
+    def test_ntdoy_full_field_mapping(self, ntdoy_result):
+        values = by_field(ntdoy_result)
+        assert values[Field.MARKET_CAP].value_num == pytest.approx(50586124288)
+        assert values[Field.PE_TTM].value_num == pytest.approx(19.589287)
+        assert values[Field.PE_FWD].value_num == pytest.approx(5.1261683)
+        # PEG comes from trailingPegRatio (3.5766), never pegRatio (3.58)
+        assert values[Field.PEG].value_num == pytest.approx(3.5766)
+        # margins are already fractions — pass through, no rescaling
+        assert values[Field.GROSS_MARGIN].value_num == pytest.approx(0.39297)
+        assert values[Field.OPERATING_MARGIN].value_num == pytest.approx(0.14668)
+        assert values[Field.ANALYST_RATING].value_text == "none"
+        assert values[Field.ANALYST_COUNT].value_num == pytest.approx(1.0)
+        # calendar's stringified "[datetime.date(2026, 8, 6)]" is recovered
+        assert values[Field.NEXT_EARNINGS_DATE].value_date == date(2026, 8, 6)
+        for obs in ntdoy_result.observations:
+            assert obs.ticker == "NTDOY"
+            assert obs.source is Source.YAHOO
+            assert obs.fetched_at == FETCHED_AT
+
+    def test_price_observed_at_from_regular_market_time_epoch(self, ntdoy_result):
+        values = by_field(ntdoy_result)
+        assert values[Field.PRICE].observed_at == datetime.fromtimestamp(1783713600, tz=UTC)
+        # only the quote carries a source-reported timestamp
+        assert values[Field.PE_TTM].observed_at is None
+
+    def test_absent_keys_are_simply_absent(self, ntdoy_result):
+        """NTDOY's info has no debtToEquity key: no observation, and no
+        ParseFailure either — absence is not the same as unreadable."""
+        assert Field.DEBT_TO_EQUITY not in by_field(ntdoy_result)
+        assert not any(f.field is Field.DEBT_TO_EQUITY for f in ntdoy_result.parse_failures)
+
+    def test_debt_to_equity_percent_normalized_to_ratio(self):
+        result = YahooSource().parse({"info": {"debtToEquity": 41.5}}, "TEST", FETCHED_AT)
+        [obs] = result.observations
+        assert obs.field is Field.DEBT_TO_EQUITY
+        assert obs.value_num == pytest.approx(0.415)  # yfinance reports percent
+
+    def test_current_price_falls_back_to_regular_market_price(self):
+        payload = {"info": {"regularMarketPrice": 12.5, "regularMarketTime": 1783713600}}
+        values = by_field(YahooSource().parse(payload, "TEST", FETCHED_AT))
+        assert values[Field.PRICE].value_num == pytest.approx(12.5)
+        assert values[Field.PRICE].observed_at == datetime.fromtimestamp(1783713600, tz=UTC)
+
+    def test_malformed_value_becomes_parse_failure_not_exception(self):
+        payload = {"info": {"trailingPE": "N/A garbled", "currentPrice": 10.0}}
+        result = YahooSource().parse(payload, "TEST", FETCHED_AT)
+        values = by_field(result)
+        assert Field.PE_TTM not in values  # not silently passed through…
+        [failure] = result.parse_failures  # …but not silently dropped either
+        assert failure.field is Field.PE_TTM
+        assert failure.raw == "N/A garbled"
+        assert failure.source is Source.YAHOO
+        assert values[Field.PRICE].value_num == pytest.approx(10.0)  # neighbors unharmed
+
+    def test_unreadable_earnings_date_becomes_parse_failure(self):
+        payload = {"calendar": {"Earnings Date": "sometime next quarter"}}
+        result = YahooSource().parse(payload, "TEST", FETCHED_AT)
+        assert result.observations == ()
+        [failure] = result.parse_failures
+        assert failure.field is Field.NEXT_EARNINGS_DATE
+        assert failure.raw == "sometime next quarter"
+
+    def test_upgrades_downgrades_become_analyst_action_records(self, ntdoy_result):
+        assert len(ntdoy_result.analyst_actions) == 6
+        first = ntdoy_result.analyst_actions[0]
+        assert first.action_date == date(2021, 7, 7)  # GradeDate datetime → date
+        assert first.firm == "Jefferies"
+        assert first.action == "down"
+        assert first.from_grade == "Buy"
+        assert first.to_grade == "Hold"
+        assert first.source is Source.YAHOO
+        # the init row carries FromGrade "" → None, not empty string
+        [init] = [a for a in ntdoy_result.analyst_actions if a.action == "init"]
+        assert init.from_grade is None
+        assert init.to_grade == "Underperform"
+
+    def test_malformed_action_record_becomes_parse_failure(self):
+        payload = {
+            "info": {},
+            "upgrades_downgrades": [
+                {"Firm": "NoDate Broker", "ToGrade": "Buy", "Action": "up"},  # no GradeDate
+                {"GradeDate": "2026-07-01T10:00:00", "Firm": "OK Broker",
+                 "ToGrade": "Hold", "FromGrade": "Buy", "Action": "down"},
+            ],
+        }
+        result = YahooSource().parse(payload, "TEST", FETCHED_AT)
+        [action] = result.analyst_actions  # the good record still lands
+        assert action.firm == "OK Broker"
+        [failure] = result.parse_failures  # the bad one is evidence, not an absence
+        assert failure.field is Field.ANALYST_RATING
+        assert "NoDate Broker" in failure.raw
+
+    @pytest.mark.parametrize("junk", GARBAGE_PAYLOADS)
+    def test_parse_never_raises_on_garbage(self, junk):
+        result = YahooSource().parse(junk, "TEST", FETCHED_AT)
+        assert result.observations == ()
+        assert result.analyst_actions == ()
+
+    def test_covers_everything(self):
+        assert YahooSource().covers("NTDOY")
+        assert YahooSource().covers("VOO")
+
+
+# --- Finnhub ----------------------------------------------------------------
+
+
+class TestFinnhubParse:
+    def test_quote_fixture_maps_price_with_observed_at(self):
+        payload = load("finnhub/NVDA-quote.json")
+        result = FinnhubSource(api_key="test-key").parse(payload, "NVDA", FETCHED_AT)
+        [obs] = result.observations
+        assert obs.field is Field.PRICE
+        assert obs.value_num == pytest.approx(164.92)
+        assert obs.observed_at == datetime.fromtimestamp(1783713600, tz=UTC)
+        assert obs.source is Source.FINNHUB
+        assert obs.fetched_at == FETCHED_AT
+        assert result.parse_failures == ()
+
+    def test_zero_price_is_absent_not_a_zero_observation(self):
+        """Finnhub's convention for unknown symbols: c=0, t=0. That is 'no
+        data', and it must be absent — a 0.0 price observation would be a
+        fabricated value."""
+        payload = {"c": 0, "d": None, "dp": None, "h": 0, "l": 0, "o": 0, "pc": 0, "t": 0}
+        result = FinnhubSource(api_key="k").parse(payload, "NOSUCH", FETCHED_AT)
+        assert result.observations == ()
+        assert result.parse_failures == ()
+
+    def test_missing_price_key_is_absent(self):
+        result = FinnhubSource(api_key="k").parse({}, "TEST", FETCHED_AT)
+        assert result.observations == ()
+        assert result.parse_failures == ()
+
+    def test_unreadable_price_becomes_parse_failure(self):
+        result = FinnhubSource(api_key="k").parse({"c": "garbled", "t": 1783713600}, "TEST", FETCHED_AT)
+        assert result.observations == ()
+        [failure] = result.parse_failures
+        assert failure.field is Field.PRICE
+        assert failure.raw == "garbled"
+        assert failure.source is Source.FINNHUB
+
+    def test_nonpositive_timestamp_means_no_observed_at(self):
+        result = FinnhubSource(api_key="k").parse({"c": 10.5, "t": 0}, "TEST", FETCHED_AT)
+        [obs] = result.observations
+        assert obs.observed_at is None  # staleness gate then skips: no evidence
+
+    @pytest.mark.parametrize("junk", GARBAGE_PAYLOADS[:4])
+    def test_parse_never_raises_on_garbage(self, junk):
+        result = FinnhubSource(api_key="k").parse(junk, "TEST", FETCHED_AT)
+        assert result.observations == ()
+
+
+# --- EDGAR ------------------------------------------------------------------
+
+
+@pytest.fixture()
+def edgar_source(monkeypatch):
+    """An EdgarSource whose HTTP layer serves the synthetic ticker→CIK
+    mapping — covers() runs its real path (fetch, build, cache) offline."""
+    mapping_payload = load("edgar/company-tickers-synthetic.json")
+    monkeypatch.setattr(EdgarSource, "_get_json", lambda self, url: mapping_payload)
+    return EdgarSource(contact_email="argus-test@example.com")
+
+
+class TestEdgarCovers:
+    def test_mapped_tickers_are_covered(self, edgar_source):
+        assert edgar_source.covers("AAPL")
+        assert edgar_source.covers("ACME")
+        assert edgar_source.covers("BRK-B")
+
+    def test_symbology_is_normalized_to_sec_dashes(self, edgar_source):
+        assert edgar_source.covers("brk.b")  # dotted, lowercased → BRK-B
+        assert edgar_source.covers(" aapl ")
+
+    def test_unmapped_otc_adr_and_etf_are_not_covered(self, edgar_source):
+        assert not edgar_source.covers("NTDOY")  # OTC ADR: no EDGAR filings
+        assert not edgar_source.covers("VOO")  # ETF: no companyfacts
+
+    def test_mapping_is_fetched_once_and_cached(self, monkeypatch):
+        mapping_payload = load("edgar/company-tickers-synthetic.json")
+        calls = []
+        monkeypatch.setattr(
+            EdgarSource, "_get_json", lambda self, url: calls.append(url) or mapping_payload
+        )
+        source = EdgarSource(contact_email="argus-test@example.com")
+        assert source.covers("AAPL")
+        assert not source.covers("NTDOY")
+        assert len(calls) == 1
+
+
+class TestEdgarParse:
+    @pytest.fixture()
+    def acme_result(self):
+        payload = load("edgar/companyfacts-ACME-synthetic.json")
+        return EdgarSource(contact_email="argus-test@example.com").parse(
+            payload, "ACME", FETCHED_AT
+        )
+
+    def test_ratio_math_over_latest_annual_period(self, acme_result):
+        values = by_field(acme_result)
+        assert values[Field.GROSS_MARGIN].value_num == pytest.approx(0.40)  # 450M / 1125M
+        assert values[Field.OPERATING_MARGIN].value_num == pytest.approx(0.20)  # 225M / 1125M
+        assert values[Field.DEBT_TO_EQUITY].value_num == pytest.approx(1.20)  # 660M / 550M
+        assert len(acme_result.observations) == 3
+        assert acme_result.parse_failures == ()
+
+    def test_observed_at_is_period_end_utc_midnight(self, acme_result):
+        for obs in acme_result.observations:
+            assert obs.observed_at == datetime(2024, 12, 31, tzinfo=UTC)
+            assert obs.source is Source.EDGAR
+
+    def test_quarterly_entries_never_leak_into_annual_math(self, acme_result):
+        """The fixture's 10-Q Q1-2025 rows have a LATER period end and a 0.50
+        gross margin — if form/duration filtering broke, they would win."""
+        values = by_field(acme_result)
+        assert values[Field.GROSS_MARGIN].value_num != pytest.approx(0.50)
+        assert values[Field.GROSS_MARGIN].observed_at == datetime(2024, 12, 31, tzinfo=UTC)
+
+    def test_revenue_falls_back_to_contract_revenue_tag(self):
+        """Post-ASC-606 filers (Apple) report under the long tag, not Revenues."""
+        payload = {
+            "facts": {
+                "us-gaap": {
+                    "GrossProfit": {"units": {"USD": [
+                        {"start": "2025-01-01", "end": "2025-12-31", "val": 40, "form": "10-K"},
+                    ]}},
+                    "RevenueFromContractWithCustomerExcludingAssessedTax": {"units": {"USD": [
+                        {"start": "2025-01-01", "end": "2025-12-31", "val": 100, "form": "10-K"},
+                    ]}},
+                }
+            }
+        }
+        result = EdgarSource(contact_email="x@example.com").parse(payload, "TEST", FETCHED_AT)
+        [obs] = result.observations
+        assert obs.field is Field.GROSS_MARGIN
+        assert obs.value_num == pytest.approx(0.40)
+
+    def test_missing_tag_means_absent_field(self):
+        """EDGAR is a cross-check: no StockholdersEquity → no DEBT_TO_EQUITY,
+        and nothing else — absence is disclosed by the digest tri-state."""
+        payload = {
+            "facts": {
+                "us-gaap": {
+                    "Liabilities": {"units": {"USD": [
+                        {"end": "2025-12-31", "val": 600, "form": "10-K"},
+                    ]}},
+                }
+            }
+        }
+        result = EdgarSource(contact_email="x@example.com").parse(payload, "TEST", FETCHED_AT)
+        assert result.observations == ()
+
+    def test_zero_denominator_yields_absent_not_crash(self):
+        payload = {
+            "facts": {
+                "us-gaap": {
+                    "Liabilities": {"units": {"USD": [
+                        {"end": "2025-12-31", "val": 600, "form": "10-K"},
+                    ]}},
+                    "StockholdersEquity": {"units": {"USD": [
+                        {"end": "2025-12-31", "val": 0, "form": "10-K"},
+                    ]}},
+                }
+            }
+        }
+        result = EdgarSource(contact_email="x@example.com").parse(payload, "TEST", FETCHED_AT)
+        assert result.observations == ()
+
+    @pytest.mark.parametrize("junk", GARBAGE_PAYLOADS)
+    def test_parse_never_raises_on_garbage(self, junk):
+        result = EdgarSource(contact_email="x@example.com").parse(junk, "TEST", FETCHED_AT)
+        assert result.observations == ()
+
+
+# --- Live smoke (excluded by default via pytest addopts) ---------------------
+
+
+@pytest.mark.live
+class TestLiveSmoke:
+    def test_yahoo_live(self):
+        result = YahooSource().fetch("AAPL")
+        assert any(o.field is Field.PRICE for o in result.observations)
+
+    def test_finnhub_live(self):
+        api_key = os.environ.get("FINNHUB_API_KEY")
+        if not api_key:
+            pytest.skip("FINNHUB_API_KEY not set")
+        result = FinnhubSource(api_key=api_key).fetch("AAPL")
+        assert any(o.field is Field.PRICE for o in result.observations)
+
+    def test_edgar_live(self):
+        contact = os.environ.get("ARGUS_CONTACT_EMAIL", "invocation.dev@gmail.com")
+        source = EdgarSource(contact_email=contact)
+        assert source.covers("AAPL")
+        assert not source.covers("NTDOY")  # OTC ADR: must be not-applicable
+        result = source.fetch("AAPL")
+        assert result.observations  # margins and/or debt-to-equity

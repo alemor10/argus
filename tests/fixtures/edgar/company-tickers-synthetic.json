@@ -1,0 +1,6 @@
+{
+  "_note": "SYNTHETIC: reduced sample of https://www.sec.gov/files/company_tickers.json (the real file has ~10k entries keyed by row index). ACME is invented; the others carry their real CIKs for realism. Deliberately excludes OTC ADRs (NTDOY) and ETFs (VOO) — EDGAR does not map them.",
+  "0": {"cik_str": 320193, "ticker": "AAPL", "title": "Apple Inc."},
+  "1": {"cik_str": 1067983, "ticker": "BRK-B", "title": "BERKSHIRE HATHAWAY INC"},
+  "2": {"cik_str": 9999999, "ticker": "ACME", "title": "Acme Manufacturing Co. (synthetic)"}
+}

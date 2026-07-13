@@ -1,0 +1,14 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+dist/
+.pytest_cache/
+.ruff_cache/
+
+# Argus state — config (watchlist.yaml) is versioned; state is not
+argus.db
+argus.db-journal
+argus.db-wal
+argus.db-shm
+reports/

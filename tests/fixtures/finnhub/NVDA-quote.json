@@ -1,0 +1,11 @@
+{
+  "_note": "SYNTHETIC: hand-shaped from Finnhub's documented /quote response format, not a live capture. c=current, d=change, dp=change %, h/l/o=day high/low/open, pc=previous close, t=quote epoch seconds (2026-07-10 20:00:00Z).",
+  "c": 164.92,
+  "d": 1.02,
+  "dp": 0.6224,
+  "h": 165.5,
+  "l": 162.02,
+  "o": 163.66,
+  "pc": 163.9,
+  "t": 1783713600
+}

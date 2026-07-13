@@ -1,0 +1,151 @@
+"""The DDL contracts, tested against real SQLite (never mocked). These are the
+database-level guarantees the architecture leans on: verdict-less rows are
+impossible, at most one primary per (run, ticker, field), exactly one typed
+value column, quarantined rows can't be primary."""
+
+import sqlite3
+
+import pytest
+
+from argus.store import SCHEMA_VERSION, connect, migrate
+
+
+@pytest.fixture()
+def con(tmp_path):
+    con = connect(tmp_path / "argus.db")
+    migrate(con)
+    con.execute(
+        "INSERT INTO runs (kind, started_at, app_version) VALUES ('watch', '2026-07-12T14:00:00Z', 'test')"
+    )
+    yield con
+    con.close()
+
+
+def _insert_obs(con, **overrides):
+    row = dict(
+        run_id=1,
+        ticker="NVDA",
+        field="price",
+        source="yahoo",
+        fetched_at="2026-07-12T14:00:00Z",
+        value_num=181.25,
+        value_text=None,
+        value_date=None,
+        verdict="accepted",
+        gate_reasons=None,
+        is_primary=0,
+    )
+    row.update(overrides)
+    columns = ", ".join(row)
+    placeholders = ", ".join(f":{k}" for k in row)
+    con.execute(f"INSERT INTO observations ({columns}) VALUES ({placeholders})", row)
+
+
+def test_migrate_is_idempotent(tmp_path):
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert {"runs", "run_tickers", "run_sources", "observations", "analyst_actions", "change_events"} <= tables
+    con.close()
+
+
+def test_migrate_refuses_unknown_versions(tmp_path):
+    con = connect(tmp_path / "t.db")
+    con.execute("PRAGMA user_version = 99")
+    with pytest.raises(RuntimeError, match="schema version 99"):
+        migrate(con)
+    con.close()
+
+
+def test_verdict_is_mandatory_and_constrained(con):
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, verdict=None)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, verdict="maybe")
+
+
+def test_exactly_one_value_column(con):
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, value_text="also set")  # two values
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, value_num=None)  # no value
+
+
+def test_quarantined_rows_cannot_be_primary(con):
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, verdict="quarantined", gate_reasons='[{"code":"out_of_bounds"}]', is_primary=1)
+
+
+def test_gate_reasons_null_iff_accepted_is_db_enforced(con):
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, verdict="quarantined", gate_reasons=None)  # reason-less quarantine
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, verdict="accepted", gate_reasons='[{"code":"stale"}]')  # accepted w/ reasons
+
+
+def test_at_most_one_primary_per_run_ticker_field(con):
+    _insert_obs(con, source="yahoo", is_primary=1)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con, source="finnhub", is_primary=1)
+    # a non-primary second source is fine
+    _insert_obs(con, source="finnhub", value_num=181.30, is_primary=0)
+
+
+def test_one_accepted_row_per_run_ticker_field_source(con):
+    _insert_obs(con)
+    with pytest.raises(sqlite3.IntegrityError):
+        _insert_obs(con)  # second ACCEPTED row for the same (run, ticker, field, source)
+
+
+def test_quarantined_rows_are_exempt_from_source_uniqueness(con):
+    """An accepted value may coexist with an UNPARSEABLE sibling from the same
+    source, and several malformed records may quarantine together — a single
+    bad analyst row must not roll back the whole ticker."""
+    _insert_obs(con)  # accepted
+    _insert_obs(
+        con,
+        value_num=None,
+        value_text="N/A garbled",
+        verdict="quarantined",
+        gate_reasons='[{"code": "unparseable", "detail": "raw: N/A garbled"}]',
+    )
+    _insert_obs(
+        con,
+        value_num=None,
+        value_text="also garbled",
+        verdict="quarantined",
+        gate_reasons='[{"code": "unparseable", "detail": "raw: also garbled"}]',
+    )
+    rows = con.execute(
+        "SELECT verdict, COUNT(*) AS n FROM observations GROUP BY verdict ORDER BY verdict"
+    ).fetchall()
+    assert [(r["verdict"], r["n"]) for r in rows] == [("accepted", 1), ("quarantined", 2)]
+
+
+def test_quarantined_rows_live_beside_accepted_ones(con):
+    _insert_obs(con, is_primary=1)
+    _insert_obs(
+        con,
+        field="analyst_target_mean",
+        value_num=35.0,
+        verdict="quarantined",
+        gate_reasons='[{"code": "target_price_ratio", "detail": "3.19 outside [0.3, 3.0]"}]',
+    )
+    quarantined = con.execute(
+        "SELECT field, gate_reasons FROM observations WHERE run_id = 1 AND verdict = 'quarantined'"
+    ).fetchall()
+    assert len(quarantined) == 1
+    assert quarantined[0]["field"] == "analyst_target_mean"
+
+
+def test_analyst_actions_dedup_on_natural_key(con):
+    insert = """INSERT OR IGNORE INTO analyst_actions
+        (ticker, action_date, firm, action, to_grade, source, fetched_at, first_seen_run_id)
+        VALUES ('NVDA', '2026-07-10', 'Morgan Stanley', 'up', 'Overweight', 'yahoo', ?, 1)"""
+    con.execute(insert, ("2026-07-12T14:00:00Z",))
+    con.execute(insert, ("2026-07-19T14:00:00Z",))  # re-fetched next run: ignored
+    rows = con.execute("SELECT first_seen_run_id FROM analyst_actions").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["first_seen_run_id"] == 1

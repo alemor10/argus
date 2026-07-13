@@ -1,0 +1,108 @@
+-- Argus schema — single source of truth, applied under PRAGMA user_version.
+-- Append-only: the mutation surface of the whole program is INSERTs here,
+-- two UPDATEs on runs (finish/sweep), and one digest file write.
+-- All timestamps are UTC ISO-8601 TEXT.
+
+CREATE TABLE runs (
+    run_id      INTEGER PRIMARY KEY,
+    kind        TEXT NOT NULL CHECK (kind IN ('watch','scout')),
+    started_at  TEXT NOT NULL,
+    finished_at TEXT,
+    status      TEXT NOT NULL DEFAULT 'running'
+                CHECK (status IN ('running','complete','partial','failed')),
+    app_version TEXT NOT NULL,
+    notes       TEXT
+);
+
+-- Per-ticker outcome, committed as each ticker finishes: a crash mid-run
+-- leaves completed tickers durable and baseline-eligible. Carries the
+-- TickerContext as of the run (thesis + thresholds JSON) so run_report and
+-- `argus report --run N` regenerate bit-for-bit from SQL alone, even after
+-- the watchlist changes.
+CREATE TABLE run_tickers (
+    run_id     INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker     TEXT    NOT NULL,
+    status     TEXT    NOT NULL CHECK (status IN ('ok','partial','failed')),
+    error      TEXT,
+    thesis     TEXT,
+    thresholds TEXT    NOT NULL,   -- Thresholds.model_dump_json() at run time
+    PRIMARY KEY (run_id, ticker)
+) WITHOUT ROWID;
+
+-- Per (run, ticker, source) fetch outcome: the digest's data-health section
+-- distinguishes "source down" from "source doesn't carry this ticker".
+CREATE TABLE run_sources (
+    run_id     INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker     TEXT    NOT NULL,
+    source     TEXT    NOT NULL,
+    status     TEXT    NOT NULL CHECK (status IN ('ok','error','not_applicable')),
+    error      TEXT,
+    latency_ms INTEGER,
+    PRIMARY KEY (run_id, ticker, source)
+) WITHOUT ROWID;
+
+-- THE table. Append-only. Quarantined rows live beside accepted ones:
+-- quarantine is a verdict on data, not a different kind of data.
+CREATE TABLE observations (
+    obs_id          INTEGER PRIMARY KEY,
+    run_id          INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker          TEXT    NOT NULL,
+    field           TEXT    NOT NULL,
+    source          TEXT    NOT NULL,
+    fetched_at      TEXT    NOT NULL,
+    observed_at     TEXT,
+    value_num       REAL,
+    value_text      TEXT,
+    value_date      TEXT,
+    verdict         TEXT    NOT NULL CHECK (verdict IN ('accepted','quarantined')),
+    gate_reasons    TEXT,   -- JSON [{"code":…,"detail":…}]
+    corroborated_by TEXT,   -- JSON ["finnhub"]; NULL if uncorroborated
+    is_primary      INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0,1)),
+    CHECK ((value_num IS NOT NULL) + (value_text IS NOT NULL) + (value_date IS NOT NULL) = 1),
+    CHECK (NOT (verdict = 'quarantined' AND is_primary = 1)),
+    -- "NULL iff accepted" is a database guarantee, not a comment:
+    CHECK ((verdict = 'quarantined') = (gate_reasons IS NOT NULL))
+);
+
+-- One-row-per-(run, ticker, field, source) holds for ACCEPTED observations
+-- only: several quarantined rows per pair are legitimate (an accepted value
+-- coexisting with an UNPARSEABLE sibling from the same source, or multiple
+-- malformed records). Partial, like idx_obs_one_primary below.
+CREATE UNIQUE INDEX idx_obs_one_accepted_per_source
+    ON observations (run_id, ticker, field, source) WHERE verdict = 'accepted';
+
+-- "At most one primary per (run, ticker, field)" is a DATABASE guarantee,
+-- not an application invariant.
+CREATE UNIQUE INDEX idx_obs_one_primary
+    ON observations (run_id, ticker, field) WHERE is_primary = 1;
+CREATE INDEX idx_obs_lookup ON observations (ticker, field, verdict, run_id);
+CREATE INDEX idx_obs_run    ON observations (run_id, verdict);
+
+-- Event-shaped source data gets its own honest shape (per-firm dated actions
+-- from yfinance upgrades_downgrades). INSERT OR IGNORE on the natural key;
+-- first_seen_run_id makes "new since last run" a set-membership fact that is
+-- automatically correct across failed runs.
+CREATE TABLE analyst_actions (
+    ticker            TEXT NOT NULL,
+    action_date       TEXT NOT NULL,
+    firm              TEXT NOT NULL,
+    action            TEXT NOT NULL,
+    from_grade        TEXT,
+    to_grade          TEXT NOT NULL,
+    source            TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL,
+    first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, action_date, firm, to_grade)
+) WITHOUT ROWID;
+
+-- Emitted events, persisted so `argus report --run N` regenerates any digest
+-- exactly and the digest never re-derives differently from what was reported.
+CREATE TABLE change_events (
+    event_id        INTEGER PRIMARY KEY,
+    run_id          INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker          TEXT    NOT NULL,
+    kind            TEXT    NOT NULL,
+    payload         TEXT    NOT NULL,     -- ChangeEvent.model_dump_json()
+    baseline_run_id INTEGER REFERENCES runs(run_id)  -- NULL for state events
+);
+CREATE INDEX idx_events_run ON change_events (run_id);

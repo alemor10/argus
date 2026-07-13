@@ -1,0 +1,187 @@
+{
+  "_note": "SYNTHETIC companyfacts sample (not real SEC data). Shaped to exercise: annual-vs-quarterly period filtering; the legacy Revenues tag going stale after 2023 while the ASC-606 contract tag carries 2024 (the union must use 2024 revenue, never a stale year); total-debt construction from LongTermDebt + ShortTermBorrowings for the Yahoo-comparable D/E ratio. Expected: GM 450/1125=0.40, OM 225/1125=0.20, D/E (600+60)/550=1.20.",
+  "cik": 9999999,
+  "entityName": "Acme Manufacturing Co. (synthetic)",
+  "facts": {
+    "us-gaap": {
+      "GrossProfit": {
+        "label": "Gross Profit",
+        "description": "Aggregate revenue less cost of goods and services sold.",
+        "units": {
+          "USD": [
+            {
+              "start": "2023-01-01",
+              "end": "2023-12-31",
+              "val": 380000000,
+              "accn": "0000999999-24-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2024-02-15",
+              "frame": "CY2023"
+            },
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "val": 450000000,
+              "accn": "0000999999-25-000010",
+              "fy": 2024,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-02-14",
+              "frame": "CY2024"
+            },
+            {
+              "start": "2025-01-01",
+              "end": "2025-03-31",
+              "val": 150000000,
+              "accn": "0000999999-25-000030",
+              "fy": 2025,
+              "fp": "Q1",
+              "form": "10-Q",
+              "filed": "2025-05-05",
+              "frame": "CY2025Q1"
+            }
+          ]
+        }
+      },
+      "Revenues": {
+        "label": "Revenues",
+        "description": "Amount of revenue recognized from goods sold and services rendered.",
+        "units": {
+          "USD": [
+            {
+              "start": "2022-12-31",
+              "end": "2023-12-31",
+              "val": 1000000000,
+              "form": "10-K",
+              "fy": 2023,
+              "fp": "FY"
+            }
+          ]
+        }
+      },
+      "OperatingIncomeLoss": {
+        "label": "Operating Income (Loss)",
+        "description": "The net result for the period of deducting operating expenses from operating revenues.",
+        "units": {
+          "USD": [
+            {
+              "start": "2023-01-01",
+              "end": "2023-12-31",
+              "val": 190000000,
+              "accn": "0000999999-24-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2024-02-15",
+              "frame": "CY2023"
+            },
+            {
+              "start": "2024-01-01",
+              "end": "2024-12-31",
+              "val": 225000000,
+              "accn": "0000999999-25-000010",
+              "fy": 2024,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-02-14",
+              "frame": "CY2024"
+            }
+          ]
+        }
+      },
+      "StockholdersEquity": {
+        "label": "Stockholders' Equity Attributable to Parent",
+        "description": "Total of all stockholders' equity items.",
+        "units": {
+          "USD": [
+            {
+              "end": "2023-12-31",
+              "val": 500000000,
+              "accn": "0000999999-24-000010",
+              "fy": 2023,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2024-02-15",
+              "frame": "CY2023Q4I"
+            },
+            {
+              "end": "2024-12-31",
+              "val": 550000000,
+              "accn": "0000999999-25-000010",
+              "fy": 2024,
+              "fp": "FY",
+              "form": "10-K",
+              "filed": "2025-02-14",
+              "frame": "CY2024Q4I"
+            }
+          ]
+        }
+      },
+      "RevenueFromContractWithCustomerExcludingAssessedTax": {
+        "units": {
+          "USD": [
+            {
+              "start": "2022-12-31",
+              "end": "2023-12-31",
+              "val": 1000000000,
+              "form": "10-K",
+              "fy": 2023,
+              "fp": "FY"
+            },
+            {
+              "start": "2023-12-31",
+              "end": "2024-12-31",
+              "val": 1125000000,
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY"
+            },
+            {
+              "start": "2025-01-01",
+              "end": "2025-03-31",
+              "val": 300000000,
+              "form": "10-Q",
+              "fy": 2025,
+              "fp": "Q1"
+            }
+          ]
+        }
+      },
+      "LongTermDebt": {
+        "units": {
+          "USD": [
+            {
+              "end": "2023-12-31",
+              "val": 500000000,
+              "form": "10-K",
+              "fy": 2023,
+              "fp": "FY"
+            },
+            {
+              "end": "2024-12-31",
+              "val": 600000000,
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY"
+            }
+          ]
+        }
+      },
+      "ShortTermBorrowings": {
+        "units": {
+          "USD": [
+            {
+              "end": "2024-12-31",
+              "val": 60000000,
+              "form": "10-K",
+              "fy": 2024,
+              "fp": "FY"
+            }
+          ]
+        }
+      }
+    }
+  }
+}
