@@ -5,6 +5,7 @@ data, including a run with zero change events — "nothing changed" is
 information, and degraded runs disclose their own degradation.
 """
 
+import json
 from collections.abc import Sequence
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -424,6 +425,67 @@ class EmailDigestSink:
                 smtp.login(self.username, self.password)
                 smtp.send_message(message)
         return None
+
+
+class DiscordDigestSink:
+    """Posts a headline message (title, status, the Changes section) with the
+    full digest attached as a .md file to a Discord webhook. The headline is
+    distilled from the rendered markdown and capped well under Discord's
+    2,000-character message limit; the attachment carries the whole report.
+    HTTP failures raise; CompositeSink turns them into a disclosed delivery
+    failure rather than silence."""
+
+    def __init__(self, webhook_url: str) -> None:
+        self.webhook_url = webhook_url
+
+    def write(self, markdown: str, *, run_id: int, as_of: date) -> None:
+        import httpx
+
+        payload = {
+            "content": _discord_headline(markdown),
+            "allowed_mentions": {"parse": []},  # a digest must never ping anyone
+        }
+        response = httpx.post(
+            self.webhook_url,
+            data={"payload_json": json.dumps(payload)},
+            files={
+                "files[0]": (
+                    f"digest-{as_of.isoformat()}-run{run_id}.md",
+                    markdown.encode("utf-8"),
+                    "text/markdown",
+                )
+            },
+            timeout=30.0,
+        )
+        response.raise_for_status()
+        return None
+
+
+_DISCORD_HEADLINE_LINES = 20
+_DISCORD_HEADLINE_CHARS = 1900  # hard API limit is 2000; leave headroom
+
+
+def _discord_headline(markdown: str) -> str:
+    """Title + status + the Changes section, truncated — the message is the
+    hook, the attachment is the report."""
+    lines = markdown.splitlines()
+    title = lines[0].lstrip("# ").strip() if lines else "Argus digest"
+    status = next((line for line in lines if line.startswith("Status:")), "")
+    changes: list[str] = []
+    in_changes = False
+    for line in lines:
+        if line.startswith("## "):
+            in_changes = line.strip() == "## Changes"
+            continue
+        if in_changes and line.strip():
+            changes.append(line)
+    shown = changes[:_DISCORD_HEADLINE_LINES]
+    headline = "\n".join(part for part in (f"**{title}**", status, "", *shown) if part is not None)
+    if len(changes) > len(shown):
+        headline += "\n… (full digest attached)"
+    if len(headline) > _DISCORD_HEADLINE_CHARS:
+        headline = headline[:_DISCORD_HEADLINE_CHARS] + "\n… (truncated — full digest attached)"
+    return headline.strip()
 
 
 class DeliveryError(RuntimeError):

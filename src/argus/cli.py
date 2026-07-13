@@ -19,11 +19,19 @@ from argus import engine
 from argus.config import (
     build_contexts,
     load_watch_config,
+    resolve_discord_webhook,
     resolve_email_config,
     resolve_paths,
     resolve_secrets,
 )
-from argus.digest import CompositeSink, DigestSink, EmailDigestSink, FileDigestSink, render
+from argus.digest import (
+    CompositeSink,
+    DigestSink,
+    DiscordDigestSink,
+    EmailDigestSink,
+    FileDigestSink,
+    render,
+)
 from argus.gates import DEFAULT_PROFILE
 from argus.sources import EdgarSource, FinnhubSource, YahooSource
 from argus.sources.base import DataSource
@@ -85,15 +93,17 @@ def watch(
             "ARGUS_CONTACT_EMAIL unset — EDGAR fundamentals cross-checks will be "
             "skipped and disclosed."
         )
-    sink: DigestSink = FileDigestSink(paths.reports)
+    sinks: list[DigestSink] = [FileDigestSink(paths.reports)]
+    webhook = resolve_discord_webhook()
+    if webhook is not None:
+        sinks.append(DiscordDigestSink(webhook))
     try:
         email = resolve_email_config()
     except ValueError as exc:  # half-configured channel: refuse to run at all
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     if email is not None:
-        sink = CompositeSink(
-            FileDigestSink(paths.reports),
+        sinks.append(
             EmailDigestSink(
                 host=email.host,
                 port=email.port,
@@ -101,10 +111,14 @@ def watch(
                 password=email.password,
                 sender=email.sender,
                 recipient=email.recipient,
-            ),
+            )
         )
-    else:
-        typer.echo("ARGUS_EMAIL_TO unset — digest lands on disk only.")
+    if len(sinks) == 1:
+        typer.echo(
+            "No delivery channel configured (ARGUS_DISCORD_WEBHOOK / ARGUS_EMAIL_TO) — "
+            "digest lands on disk only."
+        )
+    sink: DigestSink = sinks[0] if len(sinks) == 1 else CompositeSink(*sinks)
     as_of = datetime.now(UTC)
     con = connect(paths.db)
     try:

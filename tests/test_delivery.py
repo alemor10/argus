@@ -83,6 +83,76 @@ class TestEmailDigestSink:
         assert smtp.sent
 
 
+class _FakeResponse:
+    def __init__(self, status_code=200):
+        self.status_code = status_code
+
+    def raise_for_status(self):
+        if self.status_code >= 400:
+            raise RuntimeError(f"HTTP {self.status_code}")
+
+
+class TestDiscordDigestSink:
+    DIGEST = (
+        "# Argus watch digest — run 9 — 2026-07-13\n\n"
+        "Status: complete.\n\n"
+        "## Changes\n\n### NVDA\n\n_thesis line_\n\n- Price 170.00 → 181.25 (+6.6%)\n\n"
+        "## Watchlist\n\n### NVDA\n\n- Price: 181.25\n"
+    )
+
+    def _post(self, captured):
+        def fake_post(url, *, data, files, timeout):
+            captured.update(url=url, data=data, files=files, timeout=timeout)
+            return _FakeResponse()
+
+        return fake_post
+
+    def test_headline_plus_full_digest_attachment(self):
+        from argus.digest import DiscordDigestSink
+
+        captured = {}
+        with patch("httpx.post", self._post(captured)):
+            result = DiscordDigestSink("https://discord.example/webhook").write(
+                self.DIGEST, run_id=9, as_of=AS_OF
+            )
+        assert result is None  # pathless sink
+        payload = __import__("json").loads(captured["data"]["payload_json"])
+        assert "Argus watch digest — run 9" in payload["content"]
+        assert "Status: complete." in payload["content"]
+        assert "+6.6%" in payload["content"]  # the Changes section is the hook
+        assert "Watchlist" not in payload["content"]  # detail stays in the attachment
+        assert payload["allowed_mentions"] == {"parse": []}
+        filename, content, mime = captured["files"]["files[0]"]
+        assert filename == "digest-2026-07-13-run9.md"
+        assert content == self.DIGEST.encode("utf-8")
+
+    def test_headline_respects_discord_message_limit(self):
+        from argus.digest import DiscordDigestSink, _discord_headline
+
+        bullets = "\n".join(f"- change number {i} with some padding text" for i in range(200))
+        digest = f"# Argus watch digest — run 9 — 2026-07-13\n\nStatus: complete.\n\n## Changes\n\n{bullets}\n"
+        headline = _discord_headline(digest)
+        assert len(headline) <= 2000
+        assert "full digest attached" in headline
+
+        captured = {}
+        with patch("httpx.post", self._post(captured)):
+            DiscordDigestSink("https://discord.example/webhook").write(
+                digest, run_id=9, as_of=AS_OF
+            )
+        payload = __import__("json").loads(captured["data"]["payload_json"])
+        assert len(payload["content"]) <= 2000
+
+    def test_http_error_raises(self):
+        from argus.digest import DiscordDigestSink
+
+        with patch("httpx.post", return_value=_FakeResponse(status_code=404)):
+            with pytest.raises(RuntimeError, match="HTTP 404"):
+                DiscordDigestSink("https://discord.example/webhook").write(
+                    self.DIGEST, run_id=9, as_of=AS_OF
+                )
+
+
 class _BoomSink:
     def write(self, markdown, *, run_id, as_of):
         raise ConnectionError("mail server down")

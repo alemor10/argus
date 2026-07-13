@@ -62,8 +62,9 @@ src/argus/
 │                        #   Takes list[TickerContext] — the seam scout reuses. Only module
 │                        #   that touches sources, gates, and store together.
 ├── digest.py            # PURE render: RunReport → markdown (tri-state per field), plus
-│                        #   DigestSink Protocol + FileDigestSink, EmailDigestSink (SMTP
-│                        #   submission), CompositeSink (all sinks attempted; failures
+│                        #   DigestSink Protocol + FileDigestSink, DiscordDigestSink
+│                        #   (webhook: headline message + .md attachment), EmailDigestSink
+│                        #   (SMTP submission), CompositeSink (all sinks attempted; failures
 │                        #   raised together as DeliveryError — undelivered must be loud)
 ├── sources/
 │   ├── __init__.py      # ALL_SOURCE_TYPES registry (hand-written tuple, not entry-points)
@@ -326,7 +327,8 @@ Key reads (all in `store/queries.py`, hand-written SQL):
 1. **Config.** Resolve paths (project dir by default; flags/env override) and
    secrets from the environment (`FINNHUB_API_KEY`, `ARGUS_CONTACT_EMAIL` —
    an unset secret omits that source at wiring time and the digest discloses
-   the degradation). Email delivery: `ARGUS_EMAIL_TO` turns it on, with
+   the degradation). Discord delivery: `ARGUS_DISCORD_WEBHOOK` turns it on
+   (headline message + full digest attached). Email delivery: `ARGUS_EMAIL_TO` turns it on, with
    `ARGUS_SMTP_USER`/`ARGUS_SMTP_PASSWORD` (+ optional `ARGUS_SMTP_HOST`,
    `ARGUS_SMTP_PORT`, `ARGUS_EMAIL_FROM`; defaults fit Gmail app-password
    submission on 465) — half-configured email refuses to run rather than

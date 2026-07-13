@@ -100,6 +100,12 @@ def resolve_secrets() -> Secrets:
     )
 
 
+def resolve_discord_webhook() -> str | None:
+    """ARGUS_DISCORD_WEBHOOK turns Discord delivery on. A single value —
+    nothing to half-configure."""
+    return os.environ.get("ARGUS_DISCORD_WEBHOOK") or None
+
+
 @dataclass(frozen=True)
 class EmailConfig:
     """SMTP submission settings for the email digest sink. Presence of

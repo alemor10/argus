@@ -8,13 +8,18 @@ from argus.config import build_contexts, load_watch_config
 
 runner = CliRunner()
 
-EMAIL_VARS = ("ARGUS_EMAIL_TO", "ARGUS_SMTP_USER", "ARGUS_SMTP_PASSWORD")
+DELIVERY_VARS = (
+    "ARGUS_EMAIL_TO",
+    "ARGUS_SMTP_USER",
+    "ARGUS_SMTP_PASSWORD",
+    "ARGUS_DISCORD_WEBHOOK",
+)
 
 
 @pytest.fixture(autouse=True)
-def _no_email_env(monkeypatch):
-    """CLI tests must not inherit a developer's real email config."""
-    for var in EMAIL_VARS:
+def _no_delivery_env(monkeypatch):
+    """CLI tests must not inherit a developer's real delivery config."""
+    for var in DELIVERY_VARS:
         monkeypatch.delenv(var, raising=False)
 
 
