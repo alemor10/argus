@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -49,7 +49,20 @@ INSERT INTO scout_candidates_v3
 DROP TABLE scout_candidates;
 ALTER TABLE scout_candidates_v3 RENAME TO scout_candidates;
 """,
+    # v1.4: run_tickers carries the thesis checks in force at run time, so the
+    # digest's holding/breached summary reproduces from SQL. Guarded ADD
+    # COLUMN — idempotent, so a re-run or a fresh-then-downgraded database
+    # never trips "duplicate column".
+    3: lambda con: _add_column_if_absent(
+        con, "run_tickers", "thesis_checks", "TEXT NOT NULL DEFAULT '[]'"
+    ),
 }
+
+
+def _add_column_if_absent(con: sqlite3.Connection, table: str, column: str, decl: str) -> None:
+    existing = {row[1] for row in con.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        con.execute(f"ALTER TABLE {table} ADD COLUMN {column} {decl}")
 
 
 def connect(path: Path | str) -> sqlite3.Connection:
@@ -80,6 +93,16 @@ def migrate(con: sqlite3.Connection) -> None:
         return
     while version < SCHEMA_VERSION:
         step = _MIGRATIONS[version]
-        with con:
-            con.executescript(f"BEGIN;\n{step}\nPRAGMA user_version = {version + 1};\nCOMMIT;")
+        nxt = version + 1
+        if callable(step):
+            # Python step: normal execute() participates in `with con:`, and
+            # the version bump commits atomically with it.
+            with con:
+                step(con)
+                con.execute(f"PRAGMA user_version = {nxt}")
+        else:
+            # SQL step: executescript autocommits, so it carries its own
+            # transaction + version bump (a mid-step failure rolls back).
+            with con:
+                con.executescript(f"BEGIN;\n{step}\nPRAGMA user_version = {nxt};\nCOMMIT;")
         version += 1

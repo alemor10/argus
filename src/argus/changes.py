@@ -37,8 +37,10 @@ from argus.models import (
     PriceMove,
     Snapshot,
     TargetMove,
+    ThesisDrift,
     TickerContext,
 )
+from argus.thesis import evaluate_thesis_checks
 
 # The ordered rating scale, ascending: index = rank. Grades off this scale
 # rank as None and the shift direction is "unclear" — the event still fires
@@ -66,14 +68,46 @@ def detect(
     history is "first seen" on that run, and 14 years of rating actions is
     baseline, not news (a real first live run produced 1,100 lines of it).
     The rows are still stored with first_seen_run_id, so from the next run
-    on, only genuinely new actions fire. Only EarningsImminent (a state
-    event) fires on a first run; the digest lists the ticker under
+    on, only genuinely new actions fire. On a first run only the state-style
+    events fire — EarningsImminent, and ThesisDrift (a breach is a breach on
+    day one, needing no history) — and the digest also lists the ticker under
     "baseline established".
     """
     events: list[ChangeEvent] = []
 
+    # Thesis drift leads — the highest-signal event a monitor emits. A check
+    # is BREACHED when the data crossed the human's stated line; `newly`
+    # distinguishes a fresh breach from one continuing since last run (a
+    # breach that only appears because the baseline could not verify the
+    # check counts as newly breached — the reader is seeing it for the first
+    # time). Fires every run while breached — suppression's failure mode is
+    # silence, and a silently-drifting thesis is the worst thing to miss.
+    if ctx.thesis_checks:
+        breached_before = {
+            r.check.raw
+            for r in (
+                evaluate_thesis_checks(ctx.thesis_checks, baseline)
+                if baseline is not None
+                else ()
+            )
+            if r.status == "breached"
+        }
+        for result in evaluate_thesis_checks(ctx.thesis_checks, current):
+            if result.status != "breached":
+                continue
+            events.append(
+                ThesisDrift(
+                    ticker=current.ticker,
+                    check=result.check.raw,
+                    field=result.check.field,
+                    observed=result.observed,
+                    thesis=ctx.thesis,
+                    newly=result.check.raw not in breached_before,
+                )
+            )
+
     # Diff and action events require a baseline run. Canonical order:
-    # price_move, target_move, consensus_shift, analyst_action,
+    # thesis_drift, price_move, target_move, consensus_shift, analyst_action,
     # earnings_imminent, field_quarantined, field_recovered.
     if baseline is not None:
         for field, threshold, make in (

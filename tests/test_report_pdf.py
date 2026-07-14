@@ -26,11 +26,16 @@ from argus.models import (
     ScoutProposal,
     Snapshot,
     SourceHealth,
+    ThesisCheck,
     TickerContext,
     TickerReport,
 )
 from argus.report_pdf import (
+    _CRITICAL,
     _FISCAL_YEAR_CAPTION,
+    _MUTED,
+    _SECONDARY,
+    _Cursor,
     _fmt_value,
     _health_lines,
     _identity_line,
@@ -38,9 +43,14 @@ from argus.report_pdf import (
     _peer_line,
     _revenue_chart,
     _sector_groups,
+    _thesis_breaches,
+    _thesis_header,
+    _thesis_panel,
+    _thesis_rows,
     _why_surfaced,
     build_pdf,
 )
+from argus.thesis import evaluate_thesis_checks
 
 NOW = datetime(2026, 7, 12, 14, 3, tzinfo=UTC)
 BASELINE_AT = datetime(2026, 6, 28, 13, 0, tzinfo=UTC)
@@ -793,3 +803,140 @@ class TestDeterminism:
         pdf = build_pdf(_two_proposal_report(), {"AAA": _synthetic_history()})
         assert pdf.startswith(b"%PDF")
         assert _page_count(pdf) == 3
+
+
+# --- Thesis checks (watch pages) --------------------------------------------
+
+# One condition per standing when evaluated against _thesis_values(): the
+# forward P/E clears its ceiling (holds), the gross margin misses a 90% floor
+# (breached), and PEG is absent from the snapshot (undeterminable).
+_HOLDS_CHECK = ThesisCheck(field=Field.PE_FWD, op="<=", value=25.0, raw="pe_fwd <= 25")
+_BREACHED_CHECK = ThesisCheck(
+    field=Field.GROSS_MARGIN, op=">=", value=0.90, raw="gross_margin >= 90%"
+)
+_UNVERIFIABLE_CHECK = ThesisCheck(field=Field.PEG, op="<=", value=2.0, raw="peg <= 2")
+_MIXED_CHECKS = (_HOLDS_CHECK, _BREACHED_CHECK, _UNVERIFIABLE_CHECK)
+
+
+def _thesis_values():
+    """Watch snapshot for the thesis fixtures: gross margin high enough to clear
+    a 40% line but miss a 90% one, a low forward P/E, no PEG (so a PEG check is
+    undeterminable)."""
+    return {
+        Field.PRICE: _fv(Field.PRICE, 181.25, corroborated_by=(Source.FINNHUB,)),
+        Field.PE_FWD: _fv(Field.PE_FWD, 18.4),
+        Field.GROSS_MARGIN: _fv(Field.GROSS_MARGIN, 0.741),
+        Field.ROE: _fv(Field.ROE, 0.24),
+    }
+
+
+def _thesis_results(checks=_MIXED_CHECKS, values=None):
+    return evaluate_thesis_checks(checks, _snapshot("NVDA", values or _thesis_values()))
+
+
+def _thesis_watch_report(checks, *, values=None, ticker="NVDA"):
+    target = _ticker_report(
+        ticker,
+        values if values is not None else _thesis_values(),
+        context=TickerContext(
+            ticker=ticker,
+            thesis="Datacenter capex supercycle; CUDA moat.",
+            thesis_checks=checks,
+        ),
+    )
+    return RunReport(run_id=9, kind="watch", as_of=NOW, status="complete", tickers=(target,))
+
+
+class TestThesisChecks:
+    def test_rows_render_each_standing(self):
+        # Panel content at the pure seam (text is compressed inside the PDF
+        # stream): holds/breached/undeterminable each get their row, and the
+        # breached numeric fraction reads as a percent (0.741 → 74.1%).
+        rows = [text for text, _tone in _thesis_rows(_thesis_results())]
+        assert rows == [
+            "pe_fwd <= 25 — HOLDS",
+            "gross_margin >= 90% — BREACHED (now 74.1%)",
+            "peg <= 2 — UNVERIFIABLE (no accepted value this run)",
+        ]
+
+    def test_only_the_breach_is_critical_toned(self):
+        tones = [tone for _text, tone in _thesis_rows(_thesis_results())]
+        assert tones == [_SECONDARY, _CRITICAL, _MUTED]
+
+    def test_breached_ratio_field_formats_two_decimals(self):
+        # A non-percent numeric field breaches with 2dp, mirroring _fmt_value.
+        checks = (
+            ThesisCheck(
+                field=Field.DEBT_TO_EQUITY, op="<=", value=0.30, raw="debt_to_equity <= 0.30"
+            ),
+        )
+        values = {Field.DEBT_TO_EQUITY: _fv(Field.DEBT_TO_EQUITY, 0.42)}
+        rows = [text for text, _tone in _thesis_rows(_thesis_results(checks, values))]
+        assert rows == ["debt_to_equity <= 0.30 — BREACHED (now 0.42)"]
+
+    def test_header_flags_a_breach_with_unverifiable_tally(self):
+        text, tone = _thesis_header(_thesis_results())
+        assert text == "⚠ Thesis checks — 1/3 BREACHED (1 unverifiable this run)"
+        assert tone == _CRITICAL
+
+    def test_header_reads_holding_when_nothing_breached(self):
+        checks = (
+            ThesisCheck(field=Field.PE_FWD, op="<=", value=25.0, raw="pe_fwd <= 25"),
+            ThesisCheck(
+                field=Field.GROSS_MARGIN, op=">=", value=0.40, raw="gross_margin >= 40%"
+            ),
+            ThesisCheck(field=Field.ROE, op=">=", value=0.10, raw="roe >= 10%"),
+        )
+        text, tone = _thesis_header(_thesis_results(checks))
+        assert text == "Thesis checks — 3/3 holding"
+        assert tone == _SECONDARY
+
+    def test_no_checks_draws_no_panel(self):
+        # Omission is the contract: a ticker with no thesis_checks leaves the
+        # cursor untouched and draws nothing — absence means the human attached
+        # no conditions, never that everything silently holds.
+        fig = plt.figure(figsize=(8.5, 11.0))
+        try:
+            cur = _Cursor(fig, y=0.9)
+            _thesis_panel(cur, _ticker_report("NVDA", _garp_values()))
+            assert cur.y == 0.9
+            assert fig.texts == []
+        finally:
+            plt.close(fig)
+
+    def test_failed_ticker_with_checks_draws_no_panel(self):
+        # No snapshot to judge against → the panel is omitted (mirrors the
+        # digest's _thesis_standing), and the ticker counts zero breaches.
+        dead = TickerReport(
+            context=TickerContext(ticker="X", thesis_checks=(_BREACHED_CHECK,)),
+            status="failed",
+            error="boom",
+        )
+        assert _thesis_breaches(dead) == 0
+        fig = plt.figure(figsize=(8.5, 11.0))
+        try:
+            cur = _Cursor(fig, y=0.9)
+            _thesis_panel(cur, dead)
+            assert cur.y == 0.9
+            assert fig.texts == []
+        finally:
+            plt.close(fig)
+
+    def test_breaches_counted_for_the_summary_marker(self):
+        breaching = _thesis_watch_report(_MIXED_CHECKS).tickers[0]
+        holding = _thesis_watch_report((_HOLDS_CHECK,)).tickers[0]
+        assert _thesis_breaches(breaching) == 1
+        assert _thesis_breaches(holding) == 0
+
+    def test_panel_and_summary_marker_render(self):
+        # End to end: the detail-page panel (all three standings) and the
+        # summary-page drift marker both render without crashing.
+        report = _thesis_watch_report(_MIXED_CHECKS)
+        pdf = build_pdf(report, {"NVDA": _synthetic_history()})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 2
+
+    def test_thesis_bytes_are_deterministic(self):
+        report = _thesis_watch_report(_MIXED_CHECKS)
+        history = {"NVDA": _synthetic_history()}
+        assert build_pdf(report, history) == build_pdf(report, history)

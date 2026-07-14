@@ -36,6 +36,7 @@ from argus.digest import (
     FileDigestSink,
     render,
 )
+from argus.thesis import parse_thesis_check
 from argus.gates import DEFAULT_PROFILE
 from argus.sources import EdgarSource, FinnhubSource, YahooSource
 from argus.sources.base import DataSource
@@ -61,14 +62,21 @@ defaults:
   earnings_within_days: 7
 
 # Argus never adds tickers on its own — uncomment and edit, or use
-# `argus promote TICKER --thesis "..."` on a scout proposal:
+# `argus promote TICKER --thesis "..." --check "revenue_growth >= 20%"`.
+#
+# thesis_checks are YOUR falsifiable lines: the watch digest flags a breach
+# against them (e.g. revenue_growth dropping below 20%). Grammar:
+#   <field> <op> <value>   ops: >= <= > < == != (numbers), == != in (rating)
+#   write margins/growth as percents ("gross_margin >= 65%").
 tickers: []
 # tickers:
 #   - ticker: NVDA
 #     thesis: "Datacenter capex supercycle; CUDA moat."
 #     thresholds: { price_move_pct: 8.0 }   # volatile name, raise the bar
-#   - ticker: NTDOY
-#     thesis: "Switch 2 cycle + IP monetization."
+#     thesis_checks:
+#       - "revenue_growth >= 20%"           # the supercycle claim
+#       - "gross_margin >= 65%"             # the pricing-power / moat claim
+#       - "analyst_rating in [strong_buy, buy]"
 """
 
 SCOUT_TEMPLATE = """\
@@ -340,6 +348,14 @@ def promote(
             help="Why you believe in this name — writing it IS the decision. Required.",
         ),
     ],
+    check: Annotated[
+        Optional[list[str]],
+        typer.Option(
+            "--check",
+            help='Falsifiable thesis condition, repeatable — e.g. --check "revenue_growth >= 20%". '
+            "Watch flags a breach against your own line.",
+        ),
+    ] = None,
     root: RootOpt = None,
 ) -> None:
     """Add a scout proposal (or any ticker) to the watchlist — human-invoked
@@ -351,6 +367,13 @@ def promote(
     if not thesis.strip():
         typer.echo("An empty thesis is not a decision — write why.", err=True)
         raise typer.Exit(1)
+    checks = [c.strip() for c in (check or []) if c.strip()]
+    for raw in checks:  # validate before writing — a bad check must fail loud now
+        try:
+            parse_thesis_check(raw)
+        except ValueError as exc:
+            typer.echo(f"Bad thesis check {raw!r}: {exc}", err=True)
+            raise typer.Exit(1) from exc
     paths = resolve_paths(root)
     if not paths.watchlist.exists():
         typer.echo(f"No watchlist at {paths.watchlist} — run `argus init` first.", err=True)
@@ -362,6 +385,10 @@ def promote(
 
     original = paths.watchlist.read_text(encoding="utf-8")
     entry = f"  - ticker: {symbol}\n    thesis: {json.dumps(thesis.strip())}\n"
+    if checks:
+        entry += "    thesis_checks:\n" + "".join(
+            f"      - {json.dumps(raw)}\n" for raw in checks
+        )
     if re.search(r"^tickers:\s*\[\]\s*$", original, flags=re.MULTILINE):
         # Replacement via lambda: a plain string here is a TEMPLATE, and the
         # json.dumps-escaped thesis would be re-interpreted (backslashes

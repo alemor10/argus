@@ -144,8 +144,9 @@ def write_ticker_result(
                 (run_id, context.ticker, h.source.value, h.status, h.error, h.latency_ms),
             )
         con.execute(
-            "INSERT INTO run_tickers (run_id, ticker, status, error, thesis, thresholds) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO run_tickers "
+            "(run_id, ticker, status, error, thesis, thresholds, thesis_checks) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 context.ticker,
@@ -153,6 +154,7 @@ def write_ticker_result(
                 error,
                 context.thesis,
                 context.thresholds.model_dump_json(),
+                json.dumps([c.model_dump(mode="json") for c in context.thesis_checks]),
             ),
         )
         if company_profile is not None:

@@ -46,7 +46,15 @@ from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
 from argus.fields import SPECS, Field, Source
-from argus.models import CompanyProfile, RunReport, ScoutProposal, Snapshot, TickerReport
+from argus.models import (
+    CompanyProfile,
+    RunReport,
+    ScoutProposal,
+    Snapshot,
+    ThesisCheckResult,
+    TickerReport,
+)
+from argus.thesis import evaluate_thesis_checks
 
 # ticker → chronological (date, close) points for ~1y, or None when history
 # could not be fetched. Plain tuples — NOT pandas — supplied by the caller
@@ -489,6 +497,21 @@ def _watch_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
     if len(tickers) > len(shown):
         cur.gap(0.006)
         cur.line(f"… and {len(tickers) - len(shown)} more tickers.", size=8.5, color=_MUTED)
+    # A breach must never be buried on a detail page — surface it here the way
+    # the markdown puts thesis drift in its Changes section. Scans ALL tickers,
+    # not just the table's first page.
+    drifted = [(t.context.ticker, n) for t in tickers if (n := _thesis_breaches(t))]
+    if drifted:
+        cur.gap(0.012)
+        cur.line(
+            "Thesis drift — human-declared conditions breached:",
+            size=9, weight="bold", color=_CRITICAL,
+        )
+        for name, n in drifted:
+            cur.line(
+                f"⚠ {name} ({n} breach{'es' if n != 1 else ''})",
+                size=8.5, color=_SECONDARY,
+            )
     failures = [t for t in tickers if t.status == "failed"]
     if failures:
         cur.gap(0.012)
@@ -596,6 +619,7 @@ def _detail_page(
             f"Change events this run: {n}" if n else "Change events this run: none.",
             size=8.5, color=_SECONDARY,
         )
+        _thesis_panel(cur, ticker_report)
 
     _price_chart(fig, (0.08, 0.435, 0.50, 0.165), history.get(ticker))
     _revenue_chart(fig, (0.665, 0.435, 0.275, 0.165), revenue_series.get(ticker))
@@ -608,6 +632,79 @@ def _detail_page(
 
     fig.text(0.5, 0.03, _UNGATED_FOOTER, ha="center", va="bottom", fontsize=8, color=_MUTED)
     return fig
+
+
+# --- Thesis checks (watch only — the human's falsifiable conditions) ------------
+
+
+def _thesis_panel(cur: _Cursor, ticker_report: TickerReport) -> None:
+    """The human's falsifiable thesis conditions and how each stands this run.
+
+    One row per check — the raw condition plus HOLDS (the quiet reassurance),
+    BREACHED (critical, with the observed value that crossed the line), or
+    UNVERIFIABLE (no accepted value this run) — under a header carrying the
+    tally, mirroring the digest's _thesis_standing so the two artifacts never
+    tell different stories. Omitted entirely when the ticker carries no checks
+    (or has no snapshot to evaluate against): an absent panel means the human
+    attached no conditions, never that everything silently holds. Argus only
+    reports these human-declared lines; it never writes the thesis itself."""
+    checks = ticker_report.context.thesis_checks
+    snapshot = ticker_report.snapshot
+    if not checks or snapshot is None:
+        return
+    results = evaluate_thesis_checks(checks, snapshot)
+    header, tone = _thesis_header(results)
+    cur.gap(0.010)
+    cur.line(header, size=9, weight="bold", color=tone)
+    cur.gap(0.003)
+    for text, row_tone in _thesis_rows(results):
+        cur.line(_clip(text, 110), size=8, color=row_tone)
+
+
+def _thesis_header(results: Sequence[ThesisCheckResult]) -> tuple[str, str]:
+    """The panel's tally line, e.g. 'Thesis checks — 3/4 holding' or, when any
+    condition is breached, the critical '⚠ Thesis checks — 1/4 BREACHED'. An
+    unverifiable count rides along (as in the digest) so 'nothing breached' is
+    never confused with 'everything checked out'."""
+    holding = sum(1 for r in results if r.status == "holds")
+    breached = sum(1 for r in results if r.status == "breached")
+    unverifiable = sum(1 for r in results if r.status == "undeterminable")
+    total = len(results)
+    if breached:
+        text, tone = f"⚠ Thesis checks — {breached}/{total} BREACHED", _CRITICAL
+    else:
+        text, tone = f"Thesis checks — {holding}/{total} holding", _SECONDARY
+    if unverifiable:
+        text += f" ({unverifiable} unverifiable this run)"
+    return text, tone
+
+
+def _thesis_rows(results: Sequence[ThesisCheckResult]) -> list[tuple[str, str]]:
+    """One (text, tone) row per evaluated check. Observed values on a breach
+    are formatted with the shared _fmt_value, so a fraction like a margin reads
+    as a percent exactly as it does in the metrics panel and the digest."""
+    rows: list[tuple[str, str]] = []
+    for r in results:
+        raw = r.check.raw
+        if r.status == "holds":
+            rows.append((f"{raw} — HOLDS", _SECONDARY))
+        elif r.status == "breached":
+            observed = _fmt_value(r.check.field, r.observed)
+            rows.append((f"{raw} — BREACHED (now {observed})", _CRITICAL))
+        else:  # undeterminable: the field had no accepted value this run
+            rows.append((f"{raw} — UNVERIFIABLE (no accepted value this run)", _MUTED))
+    return rows
+
+
+def _thesis_breaches(ticker_report: TickerReport) -> int:
+    """How many of a watched ticker's thesis checks are BREACHED this run —
+    0 when it carries no checks or its fetch failed (no snapshot to judge
+    against). Drives the summary-page drift marker."""
+    checks = ticker_report.context.thesis_checks
+    if not checks or ticker_report.snapshot is None:
+        return 0
+    results = evaluate_thesis_checks(checks, ticker_report.snapshot)
+    return sum(1 for r in results if r.status == "breached")
 
 
 # --- Business block & scout narrative (facts only — the thesis is human) --------

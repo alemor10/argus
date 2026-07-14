@@ -24,8 +24,10 @@ from argus.models import (
     RunReport,
     Snapshot,
     TargetMove,
+    ThesisDrift,
     TickerReport,
 )
+from argus.thesis import evaluate_thesis_checks
 
 # Human-facing field names. Adding a Field without a label falls back to the
 # enum value — never a KeyError in the report path.
@@ -300,9 +302,34 @@ def _watchlist_section(tickers: Sequence[TickerReport]) -> list[str]:
             # Never silently absent: a dead ticker is named, with its error.
             lines += [f"Fetch failed — no data this run ({ticker.error or 'unknown error'}).", ""]
             continue
+        thesis_line = _thesis_standing(ticker)
+        if thesis_line:
+            lines += [thesis_line, ""]
         lines += [_field_line(field, ticker) for field in Field]
         lines.append("")
     return lines
+
+
+def _thesis_standing(ticker: TickerReport) -> str:
+    """One line summarizing whether the human's thesis conditions still hold —
+    the quiet reassurance ('3/3 holding') or the flag ('⚠ 1/3 breached'), so a
+    breach is never buried and a holding thesis is visibly confirmed."""
+    checks = ticker.context.thesis_checks
+    if not checks or ticker.snapshot is None:
+        return ""
+    results = evaluate_thesis_checks(checks, ticker.snapshot)
+    holding = sum(1 for r in results if r.status == "holds")
+    breached = [r for r in results if r.status == "breached"]
+    unverifiable = sum(1 for r in results if r.status == "undeterminable")
+    total = len(results)
+    if breached:
+        broken = "; ".join(r.check.raw for r in breached)
+        summary = f"⚠ Thesis: {len(breached)}/{total} checks BREACHED — {broken}"
+    else:
+        summary = f"Thesis: {holding}/{total} checks holding"
+    if unverifiable:
+        summary += f" ({unverifiable} unverifiable this run)"
+    return f"_{summary}_"
 
 
 def _quarantine_section(tickers: Sequence[TickerReport]) -> list[str]:
@@ -394,6 +421,13 @@ def _footer(report: RunReport) -> list[str]:
 
 def _event_line(event: ChangeEvent) -> str:
     match event:
+        case ThesisDrift(check=check, field=field, observed=observed, newly=newly):
+            shown = _fmt_value(field, observed) if isinstance(observed, (int, float)) else observed
+            status = "newly breached" if newly else "still breached"
+            return (
+                f"⚠ THESIS DRIFT — your line \"{check}\" is broken: "
+                f"{_label(field)} is now {shown} ({status})"
+            )
         case PriceMove(old=old, new=new, pct=pct, threshold=threshold, old_as_of=old_as_of):
             return (
                 f"Price {old:.2f} → {new:.2f} ({pct:+.1f}%, threshold {threshold:.1f}%)"

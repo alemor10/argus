@@ -625,8 +625,46 @@ CREATE TABLE scout_candidates (
 ) WITHOUT ROWID;
 ```
 
+## Thesis drift — v1.4
+
+The one intelligence feature most at risk of violating the hard constraints
+(no forecasts, no autonomous judgment), designed so it cannot: **Argus never
+interprets the thesis prose.** The human attaches falsifiable *conditions*
+when promoting a name — the lines that, if crossed, mean "reconsider" — and
+watch reports when the data crosses them. A breach is not a prediction; it is
+current gated data compared against a line the human drew. It is the same in
+kind as a `price_move_pct` alert: the human sets the threshold, Argus reports
+the crossing, the human decides. This is also good discipline — pre-registering
+your disconfirming evidence.
+
+Flow:
+1. **Declare** — `argus promote NVDA --thesis "..." --check "revenue_growth >= 20%"
+   --check "gross_margin >= 65%"` (repeatable), or `thesis_checks:` in
+   `watchlist.yaml`. Grammar (`src/argus/thesis.py`): `<field> <op> <value>` —
+   numeric ops `>= <= > < == !=`, text ops `== != in not in` (analyst_rating),
+   value with a trailing `%` scales to a fraction. Parsed and validated at the
+   config boundary (`build_contexts`), so a typo fails the run loudly rather
+   than silently never firing.
+2. **Carry** — `TickerContext.thesis_checks: tuple[ThesisCheck, ...]`; persisted
+   per run in `run_tickers.thesis_checks` (JSON) so the digest's holding/breached
+   standing reproduces entirely from SQL (migration v4).
+3. **Evaluate** — `thesis.evaluate_thesis_checks(checks, snapshot)` (PURE) →
+   per check: `holds`, `breached`, or `undeterminable` (no accepted value this
+   run — the thesis could not be verified, which the digest surfaces so an
+   unverifiable check is never mistaken for a passing one).
+4. **Report** — `changes.detect` emits a `ThesisDrift` event for each breach
+   (leading the canonical event order — highest signal), `newly` distinguishing
+   a fresh breach from a continuing one. Fires every run while breached
+   (suppression's failure mode is silence, and a silently-drifting thesis is
+   the worst thing to miss). The digest leads the ticker's Changes with the
+   drift and prints a per-ticker standing line ("3/4 checks holding" /
+   "⚠ 1/4 BREACHED"). Held checks are silent — a holding thesis is the quiet
+   good case.
+
 ## Post-v1 seams (built), and where extensions land
 
+- **thesis drift** → BUILT (v1.4, above): human-declared checkable conditions,
+  reported against gated data, never interpreted.
 - **scout** → BUILT (v1.1, above): constructs its own `list[TickerContext]`
   from the screener feed and calls the same `engine.run(...)` with scout's
   stricter eligibility; a paid feed (EODHD) remains a one-module swap behind

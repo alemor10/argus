@@ -20,12 +20,13 @@ CREATE TABLE runs (
 -- `argus report --run N` regenerate bit-for-bit from SQL alone, even after
 -- the watchlist changes.
 CREATE TABLE run_tickers (
-    run_id     INTEGER NOT NULL REFERENCES runs(run_id),
-    ticker     TEXT    NOT NULL,
-    status     TEXT    NOT NULL CHECK (status IN ('ok','partial','failed')),
-    error      TEXT,
-    thesis     TEXT,
-    thresholds TEXT    NOT NULL,   -- Thresholds.model_dump_json() at run time
+    run_id        INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker        TEXT    NOT NULL,
+    status        TEXT    NOT NULL CHECK (status IN ('ok','partial','failed')),
+    error         TEXT,
+    thesis        TEXT,
+    thresholds    TEXT    NOT NULL,   -- Thresholds.model_dump_json() at run time
+    thesis_checks TEXT    NOT NULL DEFAULT '[]',  -- JSON [ThesisCheck, ...] at run time
     PRIMARY KEY (run_id, ticker)
 ) WITHOUT ROWID;
 

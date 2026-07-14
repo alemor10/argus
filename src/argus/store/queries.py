@@ -20,6 +20,7 @@ from argus.models import (
     ScoutProposal,
     Snapshot,
     SourceHealth,
+    ThesisCheck,
     Thresholds,
     TickerContext,
     TickerReport,
@@ -221,7 +222,7 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
     tickers = tuple(
         _ticker_report(con, run_id, row)
         for row in con.execute(
-            """SELECT ticker, status, error, thesis, thresholds
+            """SELECT ticker, status, error, thesis, thresholds, thesis_checks
                FROM run_tickers WHERE run_id = ? ORDER BY ticker""",
             (run_id,),
         )
@@ -287,6 +288,9 @@ def _ticker_report(con: sqlite3.Connection, run_id: int, rt: sqlite3.Row) -> Tic
             ticker=ticker,
             thesis=rt["thesis"],
             thresholds=Thresholds.model_validate_json(rt["thresholds"]),
+            thesis_checks=tuple(
+                ThesisCheck.model_validate(c) for c in json.loads(rt["thesis_checks"])
+            ),
         ),
         status=rt["status"],
         snapshot=snapshot(con, run_id, ticker),

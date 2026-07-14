@@ -187,6 +187,36 @@ class Thresholds(BaseModel):
     earnings_within_days: int = 7
 
 
+ThesisOp = Literal[">=", "<=", ">", "<", "==", "!=", "in", "not_in"]
+
+
+class ThesisCheck(BaseModel):
+    """A falsifiable condition the human attached to a thesis — the line that,
+    if crossed, means "reconsider". Argus never interprets the thesis prose;
+    it only reports whether these human-declared, checkable conditions still
+    hold. Constructed by thesis.parse_thesis_check (config is the fail-loud
+    boundary), never from free text at run time."""
+
+    model_config = ConfigDict(frozen=True)
+
+    field: Field
+    op: ThesisOp
+    value: float | str | tuple[str, ...]
+    raw: str  # the original "revenue_growth >= 20%" — rendered verbatim
+
+
+class ThesisCheckResult(BaseModel):
+    """One check evaluated against a snapshot. `undeterminable` means the
+    field had no accepted value this run (missing or quarantined) — the
+    thesis could not be verified, which is itself worth showing."""
+
+    model_config = ConfigDict(frozen=True)
+
+    check: ThesisCheck
+    status: Literal["holds", "breached", "undeterminable"]
+    observed: float | str | None = None
+
+
 class TickerContext(BaseModel):
     """What the engine operates on — NOT "a watchlist entry".
 
@@ -199,6 +229,7 @@ class TickerContext(BaseModel):
     ticker: str = PydanticField(min_length=1)
     thesis: str | None = None
     thresholds: Thresholds = Thresholds()
+    thesis_checks: tuple[ThesisCheck, ...] = ()
 
 
 class AnalystActionRecord(BaseModel):
@@ -310,8 +341,24 @@ class FieldRecovered(_Event):
     field: Field
 
 
+class ThesisDrift(_Event):
+    """A human-declared thesis condition is BREACHED — the data crossed the
+    line the human said would make them reconsider. The highest-signal event
+    a monitor can emit; never a prediction, only current data vs a stated
+    line. `newly` distinguishes a fresh breach from one continuing since the
+    last run."""
+
+    kind: Literal["thesis_drift"] = "thesis_drift"
+    check: str  # the raw condition, e.g. "revenue_growth >= 20%"
+    field: Field
+    observed: float | str
+    thesis: str | None = None
+    newly: bool = True
+
+
 ChangeEvent = Annotated[
-    PriceMove
+    ThesisDrift
+    | PriceMove
     | TargetMove
     | ConsensusShift
     | AnalystAction

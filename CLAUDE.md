@@ -44,7 +44,11 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 - [ ] Quality gate module (see constraints above) — built alongside v1, not after
 
 ### Post-v1 — Intelligence layer
-- [ ] Thesis-drift detection: flag when new data cuts against the stated thesis line
+- [x] Thesis-drift detection (v1.4, 2026-07-14): the human attaches falsifiable
+      `thesis_checks` when promoting a name ("revenue_growth >= 20%"); watch flags
+      a breach against the stated line. Argus NEVER interprets the thesis prose —
+      it reports data vs a human-drawn line (no forecasts, human decides). See
+      ARCHITECTURE.md, Thesis drift.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

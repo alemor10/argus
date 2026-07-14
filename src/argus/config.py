@@ -14,6 +14,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
 
 from argus.models import Thresholds, TickerContext
+from argus.thesis import parse_thesis_check
 
 DEFAULT_WATCHLIST = "watchlist.yaml"
 DEFAULT_SCOUT = "scout.yaml"
@@ -54,9 +55,8 @@ class WatchlistEntry(BaseModel):
 
     ticker: str = PydanticField(min_length=1)
     thesis: str | None = None
-    thresholds: dict[str, int | float] = (
-        {}
-    )  # partial overrides; keys validated on merge
+    thresholds: dict[str, int | float] = {}  # partial overrides; keys validated on merge
+    thesis_checks: tuple[str, ...] = ()  # falsifiable conditions, parsed at build
 
 
 class WatchConfig(BaseModel):
@@ -89,11 +89,16 @@ def build_contexts(config: WatchConfig) -> list[TickerContext]:
             raise ValueError(f"duplicate ticker in watchlist: {entry.ticker}")
         seen.add(entry.ticker)
         merged = config.defaults.model_dump() | entry.thresholds
+        try:
+            checks = tuple(parse_thesis_check(raw) for raw in entry.thesis_checks)
+        except ValueError as exc:
+            raise ValueError(f"{entry.ticker}: bad thesis check — {exc}") from exc
         contexts.append(
             TickerContext(
                 ticker=entry.ticker,
                 thesis=entry.thesis,
                 thresholds=Thresholds(**merged),
+                thesis_checks=checks,
             )
         )
     return contexts
