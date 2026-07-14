@@ -129,17 +129,20 @@ def _pdf_artifact_builder():
     def build(report):
         from argus.digest import Attachment
         from argus.report_pdf import build_pdf
-        from argus.sources.yahoo import fetch_history
+        from argus.sources.yahoo import fetch_annual_revenue, fetch_history
 
         if report.kind == "scout":
             tickers = [p.ticker for p in report.scout if p.status == "proposed"]
         else:
             tickers = [t.context.ticker for t in report.tickers if t.status != "failed"]
         history = {ticker: fetch_history(ticker) for ticker in tickers}
+        revenue_series = {ticker: fetch_annual_revenue(ticker) for ticker in tickers}
         filename = (
             f"argus-{report.kind}-{report.as_of.date().isoformat()}-run{report.run_id}.pdf"
         )
-        return [Attachment(filename, build_pdf(report, history), "application/pdf")]
+        return [
+            Attachment(filename, build_pdf(report, history, revenue_series), "application/pdf")
+        ]
 
     return build
 

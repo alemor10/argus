@@ -59,6 +59,20 @@ def test_migrate_refuses_unknown_versions(tmp_path):
     con.close()
 
 
+def test_migrate_upgrades_older_databases_stepwise(tmp_path):
+    """A database born at schema version 1 (pre company_profiles) upgrades in
+    place — the numbered-migration path the deployed box will rely on."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    con.execute("DROP TABLE company_profiles")  # recreate a v1-shaped database
+    con.execute("PRAGMA user_version = 1")
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "company_profiles" in tables
+    con.close()
+
+
 def test_verdict_is_mandatory_and_constrained(con):
     with pytest.raises(sqlite3.IntegrityError):
         _insert_obs(con, verdict=None)

@@ -220,6 +220,23 @@ class AnalystActionRecord(BaseModel):
     fetched_at: AwareDatetime
 
 
+class CompanyProfile(BaseModel):
+    """Descriptive identity — what the business IS. Provenance-stamped like
+    everything else, but not gate-material: there are no plausibility bounds
+    on prose. Reports render it; the diff engine ignores it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    employees: int | None = None
+    summary: str | None = None
+    source: Source
+    fetched_at: AwareDatetime
+
+
 class RelationalViolation(BaseModel):
     """A relational gate tripped. The pipeline — not the check — assigns blame
     among the implicated fields using corroboration evidence."""
@@ -339,6 +356,7 @@ class TickerReport(BaseModel):
     status: Literal["ok", "partial", "failed"]
     snapshot: Snapshot | None = None
     baseline: Snapshot | None = None  # the diffed-against snapshot, for watchlist drift
+    profile: CompanyProfile | None = None  # latest known business identity
     events: tuple[ChangeEvent, ...] = ()
     quarantines: tuple[QuarantinedObservation, ...] = ()  # EVERY quarantined obs this run
     sources: tuple[SourceHealth, ...] = ()

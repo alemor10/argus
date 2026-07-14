@@ -27,6 +27,8 @@ Fetch failures (no data this run): DEADCO (yahoo: HTTP 502 from upstream; finnhu
 
 - Price: — no data (yahoo: HTTP 502 from upstream; finnhub: HTTP 502 from upstream)
 - Market cap: — no data (yahoo: HTTP 502 from upstream)
+- Revenue (TTM): — no data (yahoo: HTTP 502 from upstream)
+- Revenue growth: — no data (yahoo: HTTP 502 from upstream)
 - P/E (TTM): — no data (yahoo: HTTP 502 from upstream)
 - Fwd P/E: — no data (yahoo: HTTP 502 from upstream)
 - PEG: — no data (yahoo: HTTP 502 from upstream)
@@ -45,6 +47,8 @@ _Δ vs 2026-07-06_
 
 - Price: 10.97 (+0.6%) (yahoo, 2026-07-13 14:00Z) ✓finnhub
 - Market cap: — no data (not provided)
+- Revenue (TTM): — no data (not provided)
+- Revenue growth: — no data (not provided)
 - P/E (TTM): — no data (not provided)
 - Fwd P/E: — no data (not provided)
 - PEG: — no data (not provided)
@@ -63,6 +67,8 @@ _Δ vs 2026-07-06_
 
 - Price: 181.25 (+6.6%) (yahoo, 2026-07-13 14:00Z)
 - Market cap: — no data (not provided)
+- Revenue (TTM): — no data (not provided)
+- Revenue growth: — no data (not provided)
 - P/E (TTM): — no data (not provided)
 - Fwd P/E: 31.20 (+1.40) (yahoo, 2026-07-13 14:00Z)
 - PEG: — no data (not provided)

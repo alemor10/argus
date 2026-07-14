@@ -12,6 +12,7 @@ from argus.fields import Field
 from argus.models import (
     CHANGE_EVENT_ADAPTER,
     AnalystActionRecord,
+    CompanyProfile,
     FieldValue,
     QuarantinedObservation,
     QuarantineHit,
@@ -136,6 +137,18 @@ def quarantine_report(con: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]
            ORDER BY ticker, field, source""",
         (run_id,),
     ).fetchall()
+
+
+def company_profile(con: sqlite3.Connection, ticker: str) -> CompanyProfile | None:
+    """Latest known business identity for a ticker (append-only table;
+    newest fetched_at wins)."""
+    row = con.execute(
+        """SELECT ticker, fetched_at, source, name, sector, industry, employees, summary
+           FROM company_profiles WHERE ticker = ?
+           ORDER BY fetched_at DESC LIMIT 1""",
+        (ticker,),
+    ).fetchone()
+    return CompanyProfile.model_validate(dict(row)) if row is not None else None
 
 
 def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
@@ -274,6 +287,7 @@ def _ticker_report(con: sqlite3.Connection, run_id: int, rt: sqlite3.Row) -> Tic
         status=rt["status"],
         snapshot=snapshot(con, run_id, ticker),
         baseline=snapshot(con, baseline_id, ticker) if baseline_id is not None else None,
+        profile=company_profile(con, ticker),
         events=events,
         quarantines=quarantines,
         sources=sources,

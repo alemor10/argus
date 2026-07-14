@@ -95,6 +95,22 @@ CREATE TABLE analyst_actions (
     PRIMARY KEY (ticker, action_date, firm, to_grade)
 ) WITHOUT ROWID;
 
+-- Descriptive business identity per ticker, append-only (latest fetched_at
+-- wins on read). Not gate-material — no plausibility bounds exist for prose —
+-- but provenance-stamped like everything else. Reports render it; the diff
+-- engine never looks at it.
+CREATE TABLE company_profiles (
+    ticker     TEXT NOT NULL,
+    fetched_at TEXT NOT NULL,
+    source     TEXT NOT NULL,
+    name       TEXT,
+    sector     TEXT,
+    industry   TEXT,
+    employees  INTEGER,
+    summary    TEXT,
+    PRIMARY KEY (ticker, fetched_at)
+) WITHOUT ROWID;
+
 -- Scout candidates per run (event-shaped, like analyst_actions): which names
 -- the screen surfaced, how they ranked, and whether enrichment+gates kept
 -- them (proposed) or dropped them (excluded, with the reason). Streaks are

@@ -32,6 +32,8 @@ from argus.models import (
 _FIELD_LABELS: dict[Field, str] = {
     Field.PRICE: "Price",
     Field.MARKET_CAP: "Market cap",
+    Field.REVENUE: "Revenue (TTM)",
+    Field.REVENUE_GROWTH: "Revenue growth",
     Field.PE_TTM: "P/E (TTM)",
     Field.PE_FWD: "Fwd P/E",
     Field.PEG: "PEG",
@@ -151,8 +153,16 @@ def _proposals_section(report: RunReport) -> list[str]:
         )
     lines.append("")
     lines.append("Screen (screener claims, verified independently above):")
+    profiles = {t.context.ticker: t.profile for t in report.tickers}
     for p in proposed:
-        lines.append(f"- **{_cell(p.ticker)}** — {_cell('; '.join(p.screen_reasons.values()))}")
+        profile = profiles.get(p.ticker)
+        business = ""
+        if profile is not None and (profile.sector or profile.industry):
+            parts = " · ".join(x for x in (profile.sector, profile.industry) if x)
+            business = f" ({_cell(parts)})"
+        lines.append(
+            f"- **{_cell(p.ticker)}**{business} — {_cell('; '.join(p.screen_reasons.values()))}"
+        )
     return lines
 
 
@@ -379,8 +389,12 @@ def _field_line(field: Field, ticker: TickerReport) -> str:
 # margins (stored as fractions, rendered as percents) drift in percentage
 # points. Sub-threshold drift is information — quiet weeks should still show
 # which way things are leaning.
-_PCT_DRIFT_FIELDS = frozenset({Field.PRICE, Field.MARKET_CAP, Field.ANALYST_TARGET_MEAN})
-_PP_DRIFT_FIELDS = frozenset({Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE})
+_PCT_DRIFT_FIELDS = frozenset(
+    {Field.PRICE, Field.MARKET_CAP, Field.REVENUE, Field.ANALYST_TARGET_MEAN}
+)
+_PP_DRIFT_FIELDS = frozenset(
+    {Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE, Field.REVENUE_GROWTH}
+)
 
 
 def _drift_suffix(field: Field, value: float | str | date, baseline: Snapshot | None) -> str:
@@ -472,11 +486,11 @@ def _fmt_value(field: Field, value: float | str | date) -> str:
         return value.isoformat()
     if isinstance(value, str):
         return value
-    if field is Field.MARKET_CAP:
+    if field in (Field.MARKET_CAP, Field.REVENUE):
         return _humanize_cap(value)
     if field is Field.ANALYST_COUNT:
         return f"{value:.0f}"
-    if field in (Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE):
+    if field in (Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE, Field.REVENUE_GROWTH):
         return f"{value * 100:.1f}%"  # stored as a fraction; read as a percent
     return f"{value:.2f}"
 

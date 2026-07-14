@@ -276,6 +276,52 @@ class TestScoutRun:
         assert "tradingview" not in sources  # claims stay in scout_candidates
 
 
+class TestCompanyProfiles:
+    def test_profile_round_trips_from_fetch_to_report(self, con):
+        """A profile captured at enrichment lands in company_profiles and
+        rides TickerReport.profile into the digest inputs."""
+        from argus.models import CompanyProfile
+        from argus.store import writer
+
+        class _ProfileSource(_StubSource):
+            def fetch(self, ticker):
+                result = super().fetch(ticker)
+                return FetchResult(
+                    observations=result.observations,
+                    profile=CompanyProfile(
+                        ticker=ticker,
+                        name="Cleanco Incorporated",
+                        sector="Technology",
+                        industry="Software",
+                        employees=1200,
+                        summary="Cleanco sells verified cleanliness.",
+                        source=Source.YAHOO,
+                        fetched_at=self._fetched_at,
+                    ),
+                )
+
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=[_row("CLEANCO")]),
+            criteria=ScoutCriteria(top_n=10),
+            sources=[_ProfileSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        stored = queries.company_profile(con, "CLEANCO")
+        assert stored is not None and stored.sector == "Technology"
+        report = queries.run_report(con, outcome.run_id)
+        assert report.tickers[0].profile is not None
+        assert report.tickers[0].profile.name == "Cleanco Incorporated"
+        digest = sink.digests[outcome.run_id]
+        assert "(Technology · Software)" in digest  # business context in the md too
+
+
 class TestScoutStore:
     def test_excluded_requires_reason_in_db(self, con):
         con.execute(

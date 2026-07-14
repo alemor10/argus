@@ -28,6 +28,7 @@ from argus.digest import Attachment, DeliveryError, DigestSink, render
 from argus.gates import GateProfile, run_gates
 from argus.models import (
     AnalystActionRecord,
+    CompanyProfile,
     ParseFailure,
     RawObservation,
     SourceHealth,
@@ -66,6 +67,7 @@ class _TickerFetch:
     parse_failures: list[ParseFailure]
     actions: list[AnalystActionRecord]
     health: list[SourceHealth]
+    profile: CompanyProfile | None = None  # first source to offer one wins
 
     @property
     def status(self) -> Literal["ok", "partial", "failed"]:
@@ -111,6 +113,8 @@ def _fetch_ticker(ticker: str, sources: Sequence[DataSource]) -> _TickerFetch:
         fetch.observations.extend(result.observations)
         fetch.parse_failures.extend(result.parse_failures)
         fetch.actions.extend(result.analyst_actions)
+        if fetch.profile is None and result.profile is not None:
+            fetch.profile = result.profile
         fetch.health.append(
             SourceHealth(
                 source=source.source_id,
@@ -171,6 +175,7 @@ def run(
                 source_health=fetch.health,
                 status=status,
                 error=fetch.error,
+                company_profile=fetch.profile,
             )
         except Exception as exc:  # a ticker dying must never touch the others
             writer.write_ticker_result(

@@ -20,6 +20,8 @@ class Source(StrEnum):
 class Field(StrEnum):
     PRICE = "price"
     MARKET_CAP = "market_cap"
+    REVENUE = "revenue"
+    REVENUE_GROWTH = "revenue_growth"
     PE_TTM = "pe_ttm"
     PE_FWD = "pe_fwd"
     PEG = "peg"
@@ -80,6 +82,8 @@ SPECS: dict[Field, FieldSpec] = {
         priority=(Source.YAHOO, Source.FINNHUB),
     ),
     Field.MARKET_CAP: FieldSpec("num", bounds=(1e5, 1e14)),
+    Field.REVENUE: FieldSpec("num", bounds=(1e3, 1e13)),  # TTM, dollars
+    Field.REVENUE_GROWTH: FieldSpec("num", bounds=(-1.0, 100.0)),  # fraction, YoY
     Field.PE_TTM: FieldSpec("num", bounds=(-10_000, 10_000)),  # negative earnings are real
     Field.PE_FWD: FieldSpec("num", bounds=(-10_000, 10_000)),
     Field.PEG: FieldSpec("num", bounds=(-1_000, 1_000)),

@@ -24,6 +24,7 @@ from typing import Literal
 from argus.models import (
     AnalystActionRecord,
     ChangeEvent,
+    CompanyProfile,
     GatedObservation,
     ParseFailure,
     ScoutCandidateRecord,
@@ -87,6 +88,7 @@ def write_ticker_result(
     source_health: Sequence[SourceHealth],
     status: Literal["ok", "partial", "failed"],
     error: str | None = None,
+    company_profile: CompanyProfile | None = None,
 ) -> None:
     """ONE transaction: observations (accepted AND quarantined), analyst
     actions (INSERT OR IGNORE, first_seen_run_id=run_id), run_sources rows,
@@ -153,6 +155,23 @@ def write_ticker_result(
                 context.thresholds.model_dump_json(),
             ),
         )
+        if company_profile is not None:
+            # OR IGNORE: re-processing the same fetch must stay idempotent.
+            con.execute(
+                """INSERT OR IGNORE INTO company_profiles
+                     (ticker, fetched_at, source, name, sector, industry, employees, summary)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    company_profile.ticker,
+                    company_profile.fetched_at.isoformat(),
+                    company_profile.source.value,
+                    company_profile.name,
+                    company_profile.sector,
+                    company_profile.industry,
+                    company_profile.employees,
+                    company_profile.summary,
+                ),
+            )
 
 
 def record_events(

@@ -13,7 +13,7 @@ from typing import Any
 from pydantic import AwareDatetime
 
 from argus.fields import Field, Source
-from argus.models import AnalystActionRecord, ParseFailure, RawObservation
+from argus.models import AnalystActionRecord, CompanyProfile, ParseFailure, RawObservation
 from argus.sources.base import FetchResult, SourceError
 
 # info-key → (Field, divisor). yfinance already reports margins as fractions
@@ -21,6 +21,8 @@ from argus.sources.base import FetchResult, SourceError
 # PRICE is handled separately: it has a fallback key and carries observed_at.
 _NUM_FIELDS: tuple[tuple[str, Field, float], ...] = (
     ("marketCap", Field.MARKET_CAP, 1.0),
+    ("totalRevenue", Field.REVENUE, 1.0),
+    ("revenueGrowth", Field.REVENUE_GROWTH, 1.0),  # fraction, like the margins
     ("trailingPE", Field.PE_TTM, 1.0),
     ("forwardPE", Field.PE_FWD, 1.0),
     ("trailingPegRatio", Field.PEG, 1.0),
@@ -195,7 +197,59 @@ class YahooSource:
             observations=tuple(observations),
             parse_failures=tuple(failures),
             analyst_actions=tuple(actions),
+            profile=_profile(info, ticker, self.source_id, fetched_at),
         )
+
+
+def _profile(
+    info: dict[str, Any], ticker: str, source: Source, fetched_at: AwareDatetime
+) -> CompanyProfile | None:
+    """Descriptive identity from the info payload — rendered verbatim in
+    reports, never gated (no plausibility bounds exist for prose)."""
+
+    def clean(raw: Any) -> str | None:
+        return raw if isinstance(raw, str) and raw.strip() else None
+
+    name = clean(info.get("longName")) or clean(info.get("shortName"))
+    sector = clean(info.get("sector"))
+    industry = clean(info.get("industry"))
+    summary = clean(info.get("longBusinessSummary"))
+    employees_raw = info.get("fullTimeEmployees")
+    employees = (
+        employees_raw
+        if isinstance(employees_raw, int) and not isinstance(employees_raw, bool) and employees_raw > 0
+        else None
+    )
+    if not any((name, sector, industry, summary)):
+        return None
+    return CompanyProfile(
+        ticker=ticker,
+        name=name,
+        sector=sector,
+        industry=industry,
+        employees=employees,
+        summary=summary[:2000] if summary else None,
+        source=source,
+        fetched_at=fetched_at,
+    )
+
+
+def fetch_annual_revenue(ticker: str, years: int = 5) -> list[tuple[int, float]] | None:
+    """Annual revenue points for the PDF's revenue chart. UNGATED display
+    data, same policy as fetch_history — never enters the store."""
+    try:
+        import yfinance as yf
+
+        statement = yf.Ticker(ticker).income_stmt
+        row = statement.loc["Total Revenue"]
+        points = sorted(
+            (timestamp.year, float(value))
+            for timestamp, value in row.items()
+            if value == value  # NaN guard
+        )
+        return points[-years:] or None
+    except Exception:
+        return None
 
 
 def _failure(field: Field, raw: Any, ticker: str, fetched_at: AwareDatetime) -> ParseFailure:
