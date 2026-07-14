@@ -54,7 +54,9 @@ class WatchlistEntry(BaseModel):
 
     ticker: str = PydanticField(min_length=1)
     thesis: str | None = None
-    thresholds: dict[str, int | float] = {}  # partial overrides; keys validated on merge
+    thresholds: dict[str, int | float] = (
+        {}
+    )  # partial overrides; keys validated on merge
 
 
 class WatchConfig(BaseModel):
@@ -88,7 +90,11 @@ def build_contexts(config: WatchConfig) -> list[TickerContext]:
         seen.add(entry.ticker)
         merged = config.defaults.model_dump() | entry.thresholds
         contexts.append(
-            TickerContext(ticker=entry.ticker, thesis=entry.thesis, thresholds=Thresholds(**merged))
+            TickerContext(
+                ticker=entry.ticker,
+                thesis=entry.thesis,
+                thresholds=Thresholds(**merged),
+            )
         )
     return contexts
 

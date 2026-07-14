@@ -12,3 +12,10 @@ argus.db-journal
 argus.db-wal
 argus.db-shm
 reports/
+
+# Secrets — NEVER commit real credentials. The .example template IS versioned;
+# any real env file is not. Belt-and-suspenders: the real file lives outside
+# the repo (~/.config/argus/argus.env), but ignore these patterns anyway.
+*.env
+.env
+!*.env.example
