@@ -32,6 +32,7 @@ def _row(ticker, fwd_pe=15.0, **overrides):
         exchange="NASDAQ",
         company=f"{ticker} Inc",
         sector="Technology Services",
+        industry="Widgets",
         close=100.0,
         market_cap=5e9,
         pe_ttm=18.0,
@@ -228,6 +229,215 @@ class TestScoutRun:
         third = _scout(con, sink, RUN2_AT)  # CLEANCO proposed again
         assert queries.scout_streak(con, "CLEANCO", third.run_id) == 2
 
+    def test_verified_roe_below_floor_excludes(self, con):
+        """The SSRM case: screener claimed ROE 17.3%, verified 12.4% — the
+        verified number decides quality floors too."""
+
+        class _LowRoeSource(_StubSource):
+            def fetch(self, ticker):
+                result = super().fetch(ticker)
+                return FetchResult(
+                    observations=result.observations
+                    + (
+                        RawObservation(
+                            ticker=ticker, field=Field.ROE, value_num=0.124,
+                            source=Source.YAHOO, fetched_at=self._fetched_at,
+                        ),
+                    )
+                )
+
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=[_row("CLEANCO", roe_pct=17.3)]),
+            criteria=ScoutCriteria(top_n=10),
+            sources=[_LowRoeSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        row = con.execute(
+            "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
+            (outcome.run_id,),
+        ).fetchone()
+        assert row["status"] == "excluded"
+        assert "verified ROE 12.4%" in row["exclusion_reason"]
+        assert "17.3%" in row["exclusion_reason"]
+
+    def test_verified_shrinking_revenue_excludes(self, con):
+        """Window-honest direction check: verified MRQ YoY revenue growth
+        that is negative disqualifies whatever the screener's TTM said."""
+
+        class _ShrinkingSource(_StubSource):
+            def fetch(self, ticker):
+                result = super().fetch(ticker)
+                return FetchResult(
+                    observations=result.observations
+                    + (
+                        RawObservation(
+                            ticker=ticker, field=Field.REVENUE_GROWTH, value_num=-0.052,
+                            source=Source.YAHOO, fetched_at=self._fetched_at,
+                        ),
+                    )
+                )
+
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=[_row("CLEANCO")]),
+            criteria=ScoutCriteria(top_n=10),
+            sources=[_ShrinkingSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        row = con.execute(
+            "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
+            (outcome.run_id,),
+        ).fetchone()
+        assert row["status"] == "excluded"
+        assert "MRQ YoY" in row["exclusion_reason"]
+        assert "-5.2%" in row["exclusion_reason"]
+
+    def test_sector_leaders_persist_and_render(self, con):
+        """A sector shut out of the shortlist gets one leader row: persisted
+        with status='leader', never enriched, rendered in the digest strip."""
+        rows = [
+            _row("CLEANCO", fwd_pe=10.0),
+            _row("FINCO", fwd_pe=20.0, sector="Finance", industry="Major Banks"),
+        ]
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=rows),
+            criteria=ScoutCriteria(top_n=1),
+            sources=[_StubSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        rows_db = con.execute(
+            "SELECT ticker, status, sector FROM scout_candidates WHERE run_id = ? ORDER BY status",
+            (outcome.run_id,),
+        ).fetchall()
+        verdicts = {r["ticker"]: (r["status"], r["sector"]) for r in rows_db}
+        assert verdicts["CLEANCO"][0] == "proposed"
+        assert verdicts["FINCO"] == ("leader", "Financial Services")
+        fetched = con.execute(
+            "SELECT COUNT(*) AS n FROM run_tickers WHERE run_id = ?", (outcome.run_id,)
+        ).fetchone()
+        assert fetched["n"] == 1  # the leader was never enriched
+        digest = sink.digests[outcome.run_id]
+        assert "Sector leaders beyond the shortlist" in digest
+        assert "FINCO" in digest
+
+    def test_peer_context_round_trips(self, con):
+        """Same-industry peers + median from the SAME scan land on the
+        proposal and render in the digest bullet."""
+        rows = [
+            _row("CLEANCO", fwd_pe=10.0),
+            _row("PEERONE", fwd_pe=20.0, market_cap=9e9),
+            _row("PEERTWO", fwd_pe=30.0, market_cap=8e9),
+        ]
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=rows),
+            criteria=ScoutCriteria(top_n=10, max_per_sector=0),
+            sources=[_StubSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        report = queries.run_report(con, outcome.run_id)
+        clean = next(p for p in report.scout if p.ticker == "CLEANCO")
+        assert clean.peer_context is not None
+        assert clean.peer_context["industry"] == "Widgets"
+        assert clean.peer_context["n"] == 3
+        assert clean.peer_context["median_fwd_pe"] == 20.0
+        peer_tickers = {peer["ticker"] for peer in clean.peer_context["peers"]}
+        assert peer_tickers == {"PEERONE", "PEERTWO"}
+        assert "vs industry median fwd P/E 20" in sink.digests[outcome.run_id]
+
+    def test_render_survives_adversarial_peer_context_json(self, con):
+        """Review findings: a string median (JSON round-trips are unvalidated)
+        crashed render(); NaN fwd_pe on a leader printed 'fwd P/E nan'; both
+        must degrade, never kill the digest or report --run N."""
+        from argus.digest import render
+        from argus.models import ScoutCandidateRecord
+        from argus.store import writer
+
+        con.execute(
+            "INSERT INTO runs (kind, started_at, app_version, status, finished_at) "
+            "VALUES ('scout', ?, 't', 'complete', ?)",
+            (RUN1_AT.isoformat(), RUN1_AT.isoformat()),
+        )
+        writer.write_scout_candidates(
+            con,
+            run_id=1,
+            records=[
+                ScoutCandidateRecord(
+                    ticker="ODDCO", rank=1, status="proposed", sector="Technology",
+                    screen_reasons={"forward_pe": "fwd P/E 10.0 ≤ 25"},
+                    screener_metrics={},
+                    peer_context={"industry": "Widgets", "median_fwd_pe": "28.4", "n": None},
+                ),
+                ScoutCandidateRecord(
+                    ticker="NANCO", rank=2, status="leader", sector="Energy",
+                    screen_reasons={}, screener_metrics={"fwd_pe": float("nan")},
+                ),
+            ],
+        )
+        digest = render(queries.run_report(con, 1))  # must not raise
+        assert "ODDCO" in digest
+        assert "median fwd P/E" not in digest  # unformattable claim → omitted
+        assert "nan" not in digest
+        assert "(#2 overall)" in digest  # leader degrades to rank-only
+
+    def test_leaders_render_even_when_nothing_is_proposed(self, con):
+        """Review finding: the no-proposals early return silently swallowed
+        the leaders strip while the PDF showed it — artifacts must agree."""
+        rows = [
+            _row("BADCO", fwd_pe=10.0),  # will fail enrichment (no margins source)
+            _row("FINCO", fwd_pe=20.0, sector="Finance", industry="Major Banks"),
+        ]
+
+        class _ThinSource(_StubSource):
+            def fetch(self, ticker):  # price only → core fields unverifiable
+                result = super().fetch(ticker)
+                price_only = tuple(o for o in result.observations if o.field is Field.PRICE)
+                return FetchResult(observations=price_only)
+
+        sink = _CaptureSink()
+        outcome = run_scout(
+            con=con,
+            screener=_StubScreener(rows=rows),
+            criteria=ScoutCriteria(top_n=1),
+            sources=[_ThinSource(RUN1_AT)],
+            profile=DEFAULT_PROFILE,
+            sink=sink,
+            as_of=RUN1_AT,
+            today=RUN1_AT.date(),
+            app_version="scout-test",
+            exclude=set(),
+        )
+        digest = sink.digests[outcome.run_id]
+        assert "No candidates passed" in digest
+        assert "Sector leaders beyond the shortlist" in digest
+        assert "FINCO" in digest
+
     def test_streak_counts_consecutive_proposed_runs(self, con):
         sink = _CaptureSink()
         first = _scout(con, sink, RUN1_AT)
@@ -399,7 +609,7 @@ class TestPromote:
 
 def test_screen_smoke_end_to_end():
     """The pinned interfaces meet: screener rows → criteria.screen → ranked."""
-    candidates = screen(ROWS, ScoutCriteria(top_n=2), exclude=set())
-    assert [c.row.ticker for c in candidates][:1] == ["CLEANCO"]  # lowest PEG first
-    assert candidates[0].rank == 1
-    assert candidates[0].reasons  # populated, JSON-able
+    result = screen(ROWS, ScoutCriteria(top_n=2), exclude=set())
+    assert [c.row.ticker for c in result.shortlist][:1] == ["CLEANCO"]  # cheapest fwd-PEG first
+    assert result.shortlist[0].rank == 1
+    assert result.shortlist[0].reasons  # populated, JSON-able

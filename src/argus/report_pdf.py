@@ -2,13 +2,19 @@
 
 The PDF is the digest's visual companion. Page 1 summarizes the run with the
 same tri-state honesty as the markdown — a value the gates did not accept is
-'—', never a blank and never a guess. Then one page per proposed scout
-candidate (or per watched ticker) opens with what the business IS (the
-CompanyProfile, rendered verbatim), states — for scout pages — why the screen
-surfaced the name (a purely factual restatement of rank, streak, screener
-pass-reasons, and gate-verified values; Argus never writes the thesis), and
-pairs a trailing-year price chart plus an annual-revenue bar chart with a
-panel of gate-verified metrics, each with its provenance stamp.
+'—', never a blank and never a guess. For scout runs the proposals table is
+grouped by canonical sector, followed by the sector-leaders strip (screener
+claims, never enriched, no detail pages), the exclusions, and a Data health
+block mirroring the markdown's — the summary is the whole run on one page.
+Then one page per proposed scout candidate (or per watched ticker) opens
+with what the business IS (the CompanyProfile, rendered verbatim), states —
+for scout pages — why the screen surfaced the name (a purely factual
+restatement of rank, streak, screener pass-reasons, and gate-verified
+values; Argus never writes the thesis) plus the industry-peer context line
+(labeled screener claims, with the candidate's own verified forward P/E
+beside them), and pairs a trailing-year price chart plus an annual-revenue
+bar chart with a panel of gate-verified metrics, each with its provenance
+stamp.
 
 The charts are the ONE place ungated data appears anywhere in Argus: price
 history arrives from the caller as plain (date, close) tuples and revenue
@@ -39,7 +45,7 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
-from argus.fields import SPECS, Field
+from argus.fields import SPECS, Field, Source
 from argus.models import CompanyProfile, RunReport, ScoutProposal, Snapshot, TickerReport
 
 # ticker → chronological (date, close) points for ~1y, or None when history
@@ -71,39 +77,60 @@ _UNGATED_FOOTER = (
     "Price & revenue charts: raw Yahoo data, ungated — the metrics panel is gate-verified."
 )
 
+# Under the revenue bars: they are fiscal-year totals, while the panel's
+# Revenue (TTM) is a trailing window — the two legitimately differ, and the
+# reader must not mistake that for a data-quality bug.
+_FISCAL_YEAR_CAPTION = "fiscal years — TTM revenue in the panel may differ"
+
 # The fixed hand-off line on every scout detail page: Argus surfaces facts,
 # the human writes the thesis (hard constraint — no self-generated theses).
 _PROMOTE_LINE = 'Argus proposes; the thesis is yours — argus promote {ticker} --thesis "..."'
 
-# Human-facing field names (ROE included — the PDF postdates the Quality-GARP
-# fields). A Field without a label falls back to the enum value, never a
-# KeyError in the report path.
+# Human-facing field names — mirrors the markdown digest's labels exactly
+# (the two artifacts must never name the same field differently). A Field
+# without a label falls back to the enum value, never a KeyError in the
+# report path.
 _FIELD_LABELS: dict[Field, str] = {
     Field.PRICE: "Price",
     Field.MARKET_CAP: "Market cap",
     Field.REVENUE: "Revenue (TTM)",
-    Field.REVENUE_GROWTH: "Revenue growth",
+    Field.REVENUE_GROWTH: "Revenue growth (MRQ YoY)",
     Field.PE_TTM: "P/E (TTM)",
     Field.PE_FWD: "Fwd P/E",
     Field.PEG: "PEG",
     Field.GROSS_MARGIN: "Gross margin",
     Field.OPERATING_MARGIN: "Operating margin",
+    Field.FCF_MARGIN: "FCF margin",
     Field.ROE: "ROE",
     Field.DEBT_TO_EQUITY: "Debt/equity",
+    Field.TOTAL_CASH: "Total cash",
+    Field.TOTAL_DEBT: "Total debt",
+    Field.EV_EBITDA: "EV/EBITDA",
+    Field.DIVIDEND_YIELD: "Dividend yield",
+    Field.BETA: "Beta",
     Field.NEXT_EARNINGS_DATE: "Next earnings",
     Field.ANALYST_RATING: "Analyst rating",
     Field.ANALYST_TARGET_MEAN: "Analyst target (mean)",
     Field.ANALYST_COUNT: "Analyst count",
 }
 
-# Margins, ROE, and revenue growth are stored as fractions, read as percents
-# (same convention as the markdown digest).
+# Margins, ROE, revenue growth, and dividend yield are stored as fractions,
+# read as percents (same convention as the markdown digest).
 _PERCENT_FIELDS = frozenset(
-    {Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE, Field.REVENUE_GROWTH}
+    {
+        Field.GROSS_MARGIN,
+        Field.OPERATING_MARGIN,
+        Field.FCF_MARGIN,
+        Field.ROE,
+        Field.REVENUE_GROWTH,
+        Field.DIVIDEND_YIELD,
+    }
 )
 
 # Dollar magnitudes humanized like market cap (52.3B, never raw).
-_HUMANIZED_FIELDS = frozenset({Field.MARKET_CAP, Field.REVENUE})
+_HUMANIZED_FIELDS = frozenset(
+    {Field.MARKET_CAP, Field.REVENUE, Field.TOTAL_CASH, Field.TOTAL_DEBT}
+)
 
 
 def build_pdf(
@@ -251,6 +278,7 @@ def _status_line(report: RunReport) -> str:
 def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
     proposed = [p for p in report.scout if p.status == "proposed"]
     excluded = [p for p in report.scout if p.status == "excluded"]
+    leaders = [p for p in report.scout if p.status == "leader"]
     snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
     profiles = {t.context.ticker: t.profile for t in report.tickers}
 
@@ -264,34 +292,58 @@ def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
         cur.line("No candidates passed the screen and the quality gates this run.", color=_SECONDARY)
     else:
         columns = [
-            "#", "Ticker", "Business", "Streak", "Price",
+            "#", "Ticker", "Industry", "Streak", "Price",
             "Fwd P/E", "Gross m.", "Op m.", "ROE", "D/E",
         ]
         widths = [0.05, 0.11, 0.19, 0.08, 0.10, 0.10, 0.10, 0.10, 0.085, 0.085]
-        rows = [
-            [
-                str(p.rank),
-                _clip(p.ticker, 10),
-                _sector_cell(profiles.get(p.ticker)),
-                _streak_cell(p.streak),
-                _table_cell(snapshots.get(p.ticker), Field.PRICE),
-                _table_cell(snapshots.get(p.ticker), Field.PE_FWD),
-                _table_cell(snapshots.get(p.ticker), Field.GROSS_MARGIN),
-                _table_cell(snapshots.get(p.ticker), Field.OPERATING_MARGIN),
-                _table_cell(snapshots.get(p.ticker), Field.ROE),
-                _table_cell(snapshots.get(p.ticker), Field.DEBT_TO_EQUITY),
-            ]
-            for p in proposed
-        ]
-        _table(fig, cur, columns, rows, widths)
+        rows: list[list[str]] = []
+        bands: set[int] = set()  # row indices of the sector sub-header bands
+        for sector, group in _sector_groups(proposed):
+            bands.add(len(rows))
+            rows.append([_clip(sector, 40)] + [""] * (len(columns) - 1))
+            for p in group:
+                rows.append(
+                    [
+                        str(p.rank),
+                        _clip(p.ticker, 10),
+                        _industry_cell(profiles.get(p.ticker)),
+                        _streak_cell(p.streak),
+                        _table_cell(snapshots.get(p.ticker), Field.PRICE),
+                        _table_cell(snapshots.get(p.ticker), Field.PE_FWD),
+                        _table_cell(snapshots.get(p.ticker), Field.GROSS_MARGIN),
+                        _table_cell(snapshots.get(p.ticker), Field.OPERATING_MARGIN),
+                        _table_cell(snapshots.get(p.ticker), Field.ROE),
+                        _table_cell(snapshots.get(p.ticker), Field.DEBT_TO_EQUITY),
+                    ]
+                )
+        _table(fig, cur, columns, rows, widths, band_rows=frozenset(bands))
         cur.gap(0.006)
+        cur.wrapped(
+            "Grouped by canonical sector; '#' is the global screen rank. Every value is "
+            "gate-verified from this run's snapshots — '—' means the gates accepted nothing.",
+            size=8, color=_MUTED, style="italic", width=120, max_lines=2,
+        )
+
+    if leaders:
+        cur.gap(0.016)
         cur.line(
-            "Every value above is gate-verified from this run's snapshots; "
-            "'—' means the gates accepted nothing for that field.",
+            "Sector leaders beyond the shortlist (screener claims, not enriched)",
+            size=10, weight="bold",
+        )
+        cur.gap(0.006)
+        shown_leaders = leaders[:10]
+        for p in shown_leaders:
+            cur.line(_clip(_leader_line(p), 118), size=8.5, color=_SECONDARY)
+        if len(leaders) > len(shown_leaders):
+            cur.line(f"… and {len(leaders) - len(shown_leaders)} more.", size=8.5, color=_MUTED)
+        cur.gap(0.002)
+        cur.line(
+            "The best screen passer of each sector the shortlist left unrepresented — "
+            "coverage context only, no detail page.",
             size=8, color=_MUTED, style="italic",
         )
 
-    cur.gap(0.02)
+    cur.gap(0.016)
     cur.line("Excluded after enrichment", size=11, weight="bold")
     cur.gap(0.008)
     if not excluded:
@@ -311,6 +363,103 @@ def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
             "passed the screen but their fundamentals could not be verified cleanly this run.",
             size=8, color=_MUTED, style="italic", width=120,
         )
+
+    cur.gap(0.016)
+    cur.line("Data health", size=11, weight="bold")
+    cur.gap(0.008)
+    for text, tone in _health_lines(report):
+        cur.line(text, size=8.5, color=tone)
+
+
+def _sector_groups(proposed: Sequence[ScoutProposal]) -> list[tuple[str, list[ScoutProposal]]]:
+    """Proposals grouped by canonical sector: groups ordered by their best
+    (lowest) global rank then name, rows within a group by rank then ticker —
+    fully deterministic, the shortlist still reads top-down."""
+    groups: dict[str, list[ScoutProposal]] = {}
+    for p in proposed:
+        groups.setdefault(p.sector or "Other", []).append(p)
+    for group in groups.values():
+        group.sort(key=lambda p: (p.rank, p.ticker))
+    return sorted(groups.items(), key=lambda kv: (min(p.rank for p in kv[1]), kv[0]))
+
+
+def _leader_line(p: ScoutProposal) -> str:
+    """One sector-leader strip line — screener claims only (leaders are never
+    enriched, so there is nothing gate-verified to show)."""
+    fwd = p.screener_metrics.get("fwd_pe")
+    if _finite(fwd):
+        detail = f"claimed fwd P/E {float(fwd):.1f}, #{p.rank} overall"  # type: ignore[arg-type]
+    else:
+        detail = f"#{p.rank} overall"
+    return f"{p.sector} — {p.ticker} ({detail})"
+
+
+def _health_lines(report: RunReport) -> list[tuple[str, str]]:
+    """Per-source health rollups — the same tallies, first-error, skipped
+    cross-checks, and not-configured statements as the markdown digest's Data
+    health section (the two artifacts must never tell different health
+    stories), plus failed tickers and the run-level note when present."""
+    tickers = sorted(report.tickers, key=lambda t: t.context.ticker)
+    source_order = {s: i for i, s in enumerate(Source)}
+    tallies: dict[Source, dict[str, int]] = {}
+    first_error: dict[Source, str] = {}
+    for ticker in tickers:  # alphabetical → "first error" is deterministic
+        for health in sorted(ticker.sources, key=lambda s: source_order[s.source]):
+            tally = tallies.setdefault(health.source, {"ok": 0, "error": 0, "not_applicable": 0})
+            tally[health.status] += 1
+            if health.status == "error" and health.error and health.source not in first_error:
+                first_error[health.source] = health.error
+    lines: list[tuple[str, str]] = []
+    if not tallies:
+        lines.append(("No source health recorded.", _SECONDARY))
+    for source in Source:
+        tally = tallies.get(source)
+        if tally is None:
+            if tallies:
+                # Zero rows on a run that fetched anything = never wired in
+                # (no API key / contact email) — permanent degradation belongs
+                # in the report, not just a CLI echo.
+                lines.append(
+                    (f"{source.value}: not configured — its cross-checks never ran", _MUTED)
+                )
+            continue
+        parts = []
+        if tally["ok"]:
+            parts.append(f"{tally['ok']} ok")
+        if tally["error"]:
+            parts.append(f"{tally['error']} error" + ("s" if tally["error"] != 1 else ""))
+        if tally["not_applicable"]:
+            parts.append(f"{tally['not_applicable']} not applicable")
+        line = f"{source.value}: " + ", ".join(parts)
+        if tally["error"]:
+            if source in first_error:
+                line += f" (first: {first_error[source]})"
+            skipped = [
+                _FIELD_LABELS.get(f, f.value.replace("_", " ")).lower()
+                for f in Field
+                if SPECS[f].cross_source_rel_tol is not None
+                and source in SPECS[f].priority
+                and SPECS[f].priority[0] is not source
+            ]
+            if skipped:
+                n = tally["error"]
+                line += (
+                    f" — {', '.join(skipped)} cross-checks skipped"
+                    f" ({n} ticker{'s' if n != 1 else ''})"
+                )
+        lines.append((_clip(line, 122), _CRITICAL if tally["error"] else _SECONDARY))
+    failed = [t for t in tickers if t.status == "failed"]
+    if failed:
+        lines.append(("Failed tickers:", _CRITICAL))
+        for t in failed[:8]:
+            lines.append(
+                (_clip(f"  {t.context.ticker}: {t.error or 'unknown error'}", 122), _SECONDARY)
+            )
+        if len(failed) > 8:
+            lines.append((f"  … and {len(failed) - 8} more.", _MUTED))
+    if report.notes:
+        lines.append((_clip(f"Run note: {report.notes}", 122), _SECONDARY))
+    return lines
 
 
 def _watch_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
@@ -357,9 +506,14 @@ def _table(
     columns: list[str],
     rows: list[list[str]],
     widths: list[float],
+    band_rows: frozenset[int] = frozenset(),
 ) -> None:
     """A minimal hairline table: horizontal rules only, recessive header,
-    every row a fixed height so the layout never depends on a renderer."""
+    every row a fixed height so the layout never depends on a renderer.
+    band_rows are 0-based indices into `rows` rendered as full-width group
+    sub-headers (first cell carries the label, left-aligned on a panel
+    band) — how the proposals table groups by sector without a second
+    table per group."""
     row_height = 0.024
     height = row_height * (len(rows) + 1)
     ax = fig.add_axes((0.07, cur.y - height, 0.86, height))
@@ -370,13 +524,19 @@ def _table(
     )
     table.auto_set_font_size(False)
     table.set_fontsize(8)
-    for (row, _col), cell in table.get_celld().items():
+    for (row, col), cell in table.get_celld().items():
         cell.set_height(1.0 / (len(rows) + 1))
         cell.set_edgecolor(_GRID)
         cell.set_linewidth(0.6)
         cell.set_facecolor("none")
         if row == 0:
             cell.set_text_props(color=_SECONDARY, fontweight="bold", fontsize=7.5)
+        elif row - 1 in band_rows:
+            cell.set_facecolor(_PANEL)
+            if col == 0:  # the label cell; siblings are empty and unbordered
+                cell.set_text_props(
+                    color=_SECONDARY, fontweight="bold", fontsize=7.5, ha="left"
+                )
         else:
             cell.set_text_props(color=_INK)
     cur.gap(height + 0.008)
@@ -416,6 +576,13 @@ def _detail_page(
                 f"gate-verified): {claims}",
                 size=8, color=_MUTED, style="italic", width=118, max_lines=2,
             )
+        peers = _peer_line(proposal, snapshot)
+        if peers is not None:
+            cur.gap(0.004)
+            cur.wrapped(
+                f"Industry peers (screener claims): {peers}",
+                size=8, color=_MUTED, style="italic", width=118, max_lines=2,
+            )
     else:
         assert ticker_report is not None  # watch subjects always carry their report
         if ticker_report.context.thesis:
@@ -430,14 +597,14 @@ def _detail_page(
             size=8.5, color=_SECONDARY,
         )
 
-    _price_chart(fig, (0.08, 0.455, 0.50, 0.19), history.get(ticker))
-    _revenue_chart(fig, (0.665, 0.455, 0.275, 0.19), revenue_series.get(ticker))
+    _price_chart(fig, (0.08, 0.435, 0.50, 0.165), history.get(ticker))
+    _revenue_chart(fig, (0.665, 0.435, 0.275, 0.165), revenue_series.get(ticker))
 
-    cur = _Cursor(fig, y=0.40)
+    cur = _Cursor(fig, y=0.375)
     cur.line("Verified metrics (gate-accepted, with provenance)", size=9.5, weight="bold")
-    cur.gap(0.006)
+    cur.gap(0.005)
     for text, tone in _metric_lines(ticker_report):
-        cur.line(text, size=8, family="monospace", color=tone, step=0.0165)
+        cur.line(text, size=7.5, family="monospace", color=tone, step=0.0142)
 
     fig.text(0.5, 0.03, _UNGATED_FOOTER, ha="center", va="bottom", fontsize=8, color=_MUTED)
     return fig
@@ -513,6 +680,60 @@ def _why_surfaced(proposal: ScoutProposal, snapshot: Snapshot | None) -> str:
         n = len(proposal.screen_reasons)
         sentence += f" Passed all {n} screen rule{'s' if n != 1 else ''}."
     return f"{sentence} {_PROMOTE_LINE.format(ticker=proposal.ticker)}"
+
+
+def _peer_line(proposal: ScoutProposal, snapshot: Snapshot | None) -> str | None:
+    """The industry-peer context line, e.g.:
+    'Semiconductors (n=12) — median fwd P/E 28.4 · AVGO 32.1, AMD 29.9,
+    INTC — · AAA (verified) 18.4'. Everything before the final clause is a
+    SCREENER CLAIM (the caller labels the line as such); the final clause is
+    the proposal's own gate-verified forward P/E so claim and verified value
+    sit visibly side by side ('—' when the gates accepted none). None when
+    the proposal carries no peer context — it is optional context, and its
+    absence needs no note."""
+    ctx = proposal.peer_context
+    if not ctx:
+        return None
+    industry = str(ctx.get("industry") or "").strip() or "industry unknown"
+    head = _clip(industry, 40)
+    n = ctx.get("n")
+    if isinstance(n, int) and not isinstance(n, bool) and n > 0:
+        head += f" (n={n})"
+    median = ctx.get("median_fwd_pe")
+    if _finite(median):
+        head += f" — median fwd P/E {float(median):g}"
+    else:
+        head += " — median fwd P/E —"
+    peers: list[str] = []
+    for peer in tuple(ctx.get("peers") or ())[:8]:
+        if not isinstance(peer, Mapping):
+            continue
+        name = str(peer.get("ticker") or "").strip()
+        if not name:
+            continue
+        pe = peer.get("fwd_pe")
+        peers.append(f"{_clip(name, 8)} {float(pe):.1f}" if _finite(pe) else f"{_clip(name, 8)} —")
+    own = _verified_num(snapshot, Field.PE_FWD)
+    own_text = (
+        f"{proposal.ticker} (verified) {own:.1f}"
+        if own is not None
+        else f"{proposal.ticker} (verified) —"
+    )
+    parts = [head]
+    if peers:
+        parts.append(", ".join(peers))
+    parts.append(own_text)
+    return " · ".join(parts)
+
+
+def _finite(value: object) -> bool:
+    """True for a real, finite number — the guard every screener-claim
+    field passes through before being formatted (claims are untrusted)."""
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(float(value))
+    )
 
 
 def _verified_num(snapshot: Snapshot | None, field: Field) -> float | None:
@@ -615,6 +836,7 @@ def _revenue_chart(
             ha="center", va="bottom", fontsize=7.5, color=_INK, annotation_clip=False,
         )
     ax.set_title("Annual revenue (USD)", loc="left", fontsize=9, color=_SECONDARY)
+    ax.set_xlabel(_FISCAL_YEAR_CAPTION, fontsize=6.5, color=_MUTED, style="italic", labelpad=4)
     top = max(values + [0.0])
     bottom = min(values + [0.0])
     pad = 0.15 * ((top - bottom) or 1.0)
@@ -679,7 +901,7 @@ def _metric_lines(ticker_report: TickerReport | None) -> list[tuple[str, str]]:
         lines.append((_clip(f"Fetch failed — no data this run ({error}).", 100), _CRITICAL))
     for field in Field:
         label = _FIELD_LABELS.get(field, field.value.replace("_", " "))
-        prefix = f"{label:<23}"
+        prefix = f"{label:<26}"  # widest label: 'Revenue growth (MRQ YoY)' = 24
         fv = snapshot.values.get(field) if snapshot else None
         if fv is not None:
             marks = "".join(f"  ✓{s.value}" for s in sorted(fv.corroborated_by))
@@ -714,13 +936,15 @@ def _streak_cell(streak: int) -> str:
     return f"{streak}w" if streak > 1 else "new"
 
 
-def _sector_cell(profile: CompanyProfile | None) -> str:
-    """Compact business identity for the proposals table: the sector,
-    truncated — the detail page carries the full profile. No profile or no
-    sector → '—', same tri-state dash as the metric cells."""
-    if profile is None or not profile.sector:
+def _industry_cell(profile: CompanyProfile | None) -> str:
+    """Compact business identity for the proposals table: the profile's
+    industry, truncated (the canonical sector is already the group band, so
+    repeating it would waste the column) — the detail page carries the full
+    profile. No profile or no industry → '—', same tri-state dash as the
+    metric cells."""
+    if profile is None or not profile.industry:
         return "—"
-    return _clip(profile.sector, 18)
+    return _clip(profile.industry, 18)
 
 
 def _fmt_value(field: Field, value: object) -> str:

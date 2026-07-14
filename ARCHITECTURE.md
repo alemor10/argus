@@ -48,8 +48,8 @@ clause; and any past digest can be regenerated bit-for-bit with
 ```
 src/argus/
 ├── __init__.py          # version only
-├── cli.py               # Typer app: watch, report --run N, init, scout (stub). Parses args,
-│                        #   resolves paths, calls engine/queries. No logic.
+├── cli.py               # Typer app: watch, scout, report --run N, init, promote. Parses
+│                        #   args, resolves paths, calls engine/queries. No logic.
 ├── config.py            # Path resolution (project-dir defaults, flag/env overrides);
 │                        #   watchlist.yaml → WatchConfig → list[TickerContext]
 ├── fields.py            # THE field registry: Field enum + FieldSpec (kind, unary bounds,
@@ -84,7 +84,9 @@ src/argus/
 │   ├── __init__.py      # discovery: finds candidates; the human decides
 │   ├── screener.py      # Screener Protocol + TradingViewScreener (unofficial feed,
 │   │                    #   one-module blast radius; ScreenerRow, ScreenerError)
-│   ├── criteria.py      # PURE screen rules: ScoutCriteria (scout.yaml), screen(), ranking
+│   ├── sectors.py       # canonical 11-bucket taxonomy; TV + Yahoo vocabularies map onto it
+│   ├── criteria.py      # PURE screen rules: ScoutCriteria (scout.yaml), screen() →
+│   │                    #   ScreenResult (capped shortlist + sector leaders), ranking
 │   └── run.py           # orchestration: scan → screen → engine(kind='scout') →
 │                        #   post-enrichment eligibility → scout_candidates → digest
 └── store/
@@ -573,17 +575,25 @@ Scout finds candidates; the human decides. Weekly flow:
    TTM EPS collapses is margin compression, not a bargain). Passers ranked
    forward-PEG ascending (fwd P/E per point of revenue growth — cheap FOR
    ITS GROWTH, never naive low-P/E), watchlist members excluded
-   (dot/dash-canonicalized), capped to `top_n`.
+   (dot/dash-canonicalized), capped to `top_n` with a per-sector
+   concentration cap (`max_per_sector`, canonical 11-bucket taxonomy in
+   `scout/sectors.py` — a single-metric ranking otherwise becomes one
+   sector bet). Sectors shut out of the shortlist surface one **leader**
+   each (best passer, screener claims only, never enriched — an empty
+   sector is information, never padded). Each proposal also carries
+   **peer context** from the same scan: same-industry median forward P/E
+   and the largest peers, labeled as claims.
 3. **Enrich + gate** — the surviving candidates become `TickerContext`s and
    run through the SAME engine (`runs.kind='scout'`) with the monitor's
    gates plus scout's stricter eligibility: a candidate whose core fields
-   (price, P/E or PEG, margins) are missing or quarantined is EXCLUDED from
-   the proposal list, with the reason shown — unknown names skew
-   thinner-data, and scout proposes only clean ones. The VERIFIED forward
-   P/E must also honor the screen's own window (0 < fwd P/E ≤ ceiling):
-   the founding divergence case was a screener-claimed PEG of 0.008 that
-   verified at 11.99 — screener numbers nominate, gated numbers decide, in
-   both directions. The diff phase is
+   (price, forward or trailing P/E, margins) are missing or quarantined is
+   EXCLUDED from the proposal list, with the reason shown — unknown names
+   skew thinner-data, and scout proposes only clean ones. Verified values
+   must also honor the screen: forward P/E within (0, ceiling], ROE at or
+   above the floor (the live SSRM case: claimed 17.3%, verified 12.4%),
+   and MRQ-YoY revenue growth positive (direction only — the windows
+   differ, so the level is not compared). Screener numbers nominate,
+   gated numbers decide. The diff phase is
    skipped for scout runs (candidate sets churn weekly; diffing them is
    noise — continuity is carried by streaks instead).
 4. **Report** — a scout digest (same sinks): proposals table with OUR gated
@@ -603,11 +613,13 @@ Scout finds candidates; the human decides. Weekly flow:
 CREATE TABLE scout_candidates (
     run_id           INTEGER NOT NULL REFERENCES runs(run_id),
     ticker           TEXT    NOT NULL,
-    rank             INTEGER NOT NULL,           -- position after ranking
-    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded')),
-    exclusion_reason TEXT,                       -- NULL iff proposed
-    screen_reasons   TEXT    NOT NULL,           -- JSON: which rules passed, with values
-    screener_metrics TEXT    NOT NULL,           -- JSON: raw screener row (labeled claims)
+    rank             INTEGER NOT NULL,   -- global rank among all screen passers
+    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded','leader')),
+    sector           TEXT    NOT NULL DEFAULT 'Other',  -- canonical bucket
+    exclusion_reason TEXT,               -- NULL unless excluded
+    screen_reasons   TEXT    NOT NULL,   -- JSON: which rules passed, with values
+    screener_metrics TEXT    NOT NULL,   -- JSON: raw screener row (labeled claims)
+    peer_context     TEXT,               -- JSON: industry peers + median fwd P/E (claims)
     PRIMARY KEY (run_id, ticker),
     CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
 ) WITHOUT ROWID;

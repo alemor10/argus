@@ -33,7 +33,13 @@ _FIELD_LABELS: dict[Field, str] = {
     Field.PRICE: "Price",
     Field.MARKET_CAP: "Market cap",
     Field.REVENUE: "Revenue (TTM)",
-    Field.REVENUE_GROWTH: "Revenue growth",
+    Field.REVENUE_GROWTH: "Revenue growth (MRQ YoY)",
+    Field.FCF_MARGIN: "FCF margin",
+    Field.TOTAL_CASH: "Total cash",
+    Field.TOTAL_DEBT: "Total debt",
+    Field.EV_EBITDA: "EV/EBITDA",
+    Field.DIVIDEND_YIELD: "Dividend yield",
+    Field.BETA: "Beta",
     Field.PE_TTM: "P/E (TTM)",
     Field.PE_FWD: "Fwd P/E",
     Field.PEG: "PEG",
@@ -120,6 +126,7 @@ def _proposals_section(report: RunReport) -> list[str]:
     enrichment snapshots; the screener's numbers appear only in the
     screen-reasons column, labeled as claims."""
     proposed = [p for p in report.scout if p.status == "proposed"]
+    leaders = [p for p in report.scout if p.status == "leader"]
     lines = ["## Proposals", ""]
     if not report.scout and report.status == "failed":
         # An outage is not a verdict: "evaluated nothing" must never read as
@@ -127,31 +134,56 @@ def _proposals_section(report: RunReport) -> list[str]:
         lines.append("No candidates were evaluated this run — see the note above.")
         return lines
     if not proposed:
-        # Silence is a statement: no survivors is information.
-        lines.append("No candidates passed the screen and the quality gates this run.")
-        return lines
-    snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
-    lines += [
-        "| # | Ticker | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |",
-        "| --- | --- | --- | --- | --- | --- | --- | --- | --- |",
-    ]
-    # Display numbers are contiguous — exclusions must not leave holes in the
-    # shortlist (the screen rank survives in the exclusion lines).
-    for display_rank, p in enumerate(proposed, start=1):
-        snapshot = snapshots.get(p.ticker)
-        values = snapshot.values if snapshot is not None else {}
+        # Silence is a statement: no survivors is information — but leaders
+        # (below) still render: the strip must never vanish with the table.
+        lines += ["No candidates passed the screen and the quality gates this run.", ""]
+    else:
+        snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
+        lines += [
+            "| # | Ticker | Sector | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |",
+            "| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |",
+        ]
+        # '#' is the GLOBAL screen rank everywhere — table, leaders strip,
+        # and exclusion lines all speak one scale (and match the PDF). Gaps
+        # mean names excluded after enrichment or sector-capped.
+        for p in proposed:
+            snapshot = snapshots.get(p.ticker)
+            values = snapshot.values if snapshot is not None else {}
 
-        def cell(field: Field) -> str:
-            fv = values.get(field)
-            return _fmt_value(field, fv.value) if fv is not None else "—"
+            def cell(field: Field) -> str:
+                fv = values.get(field)
+                return _fmt_value(field, fv.value) if fv is not None else "—"
 
-        streak = f"{p.streak}w" if p.streak > 1 else "new"
+            streak = f"{p.streak}w" if p.streak > 1 else "new"
+            lines.append(
+                f"| {p.rank} | {_cell(p.ticker)} | {_cell(p.sector)} | {streak} "
+                f"| {cell(Field.PRICE)} | {cell(Field.PE_FWD)} | {cell(Field.GROSS_MARGIN)} "
+                f"| {cell(Field.OPERATING_MARGIN)} | {cell(Field.ROE)} | {cell(Field.DEBT_TO_EQUITY)} |"
+            )
+        lines.append("")
         lines.append(
-            f"| {display_rank} | {_cell(p.ticker)} | {streak} | {cell(Field.PRICE)} "
-            f"| {cell(Field.PE_FWD)} | {cell(Field.GROSS_MARGIN)} "
-            f"| {cell(Field.OPERATING_MARGIN)} | {cell(Field.ROE)} | {cell(Field.DEBT_TO_EQUITY)} |"
+            "_'#' is the global screen rank; gaps are names excluded after "
+            "enrichment or sector-capped._"
         )
-    lines.append("")
+        lines.append("")
+    if leaders:
+        # Category coverage without dilution: the best passer of each sector
+        # the shortlist left unrepresented — screener claims, not enriched.
+        lines.append(
+            "Sector leaders beyond the shortlist (screener claims, not enriched): "
+            + "; ".join(
+                f"{_cell(p.sector)} — **{_cell(p.ticker)}**"
+                + (
+                    f" (fwd P/E {p.screener_metrics.get('fwd_pe'):.1f}, #{p.rank} overall)"
+                    if _finite_number(p.screener_metrics.get("fwd_pe"))
+                    else f" (#{p.rank} overall)"
+                )
+                for p in leaders
+            )
+        )
+        lines.append("")
+    if not proposed:
+        return lines
     lines.append("Screen (screener claims, verified independently above):")
     profiles = {t.context.ticker: t.profile for t in report.tickers}
     for p in proposed:
@@ -160,10 +192,34 @@ def _proposals_section(report: RunReport) -> list[str]:
         if profile is not None and (profile.sector or profile.industry):
             parts = " · ".join(x for x in (profile.sector, profile.industry) if x)
             business = f" ({_cell(parts)})"
+        peer_note = ""
+        median = (p.peer_context or {}).get("median_fwd_pe")
+        if _finite_number(median):
+            # peer_context is an unvalidated JSON round-trip: every value is
+            # guarded here, or a stray string kills render() and the digest.
+            count = (p.peer_context or {}).get("n")
+            count_note = f", n={count:g}" if _finite_number(count) else ""
+            peer_note = (
+                f" · vs industry median fwd P/E {median:g} "
+                f"({_cell(str((p.peer_context or {}).get('industry') or 'industry'))}{count_note})"
+            )
         lines.append(
-            f"- **{_cell(p.ticker)}**{business} — {_cell('; '.join(p.screen_reasons.values()))}"
+            f"- **{_cell(p.ticker)}**{business} — "
+            f"{_cell('; '.join(p.screen_reasons.values()))}{peer_note}"
         )
     return lines
+
+
+def _finite_number(value: object) -> bool:
+    """JSON round-trips admit strings, None, and NaN where numbers belong —
+    formatting must never crash the digest over a stray claim value."""
+    import math
+
+    return (
+        isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and math.isfinite(value)
+    )
 
 
 def _scout_exclusions_section(report: RunReport) -> list[str]:
@@ -390,10 +446,24 @@ def _field_line(field: Field, ticker: TickerReport) -> str:
 # points. Sub-threshold drift is information — quiet weeks should still show
 # which way things are leaning.
 _PCT_DRIFT_FIELDS = frozenset(
-    {Field.PRICE, Field.MARKET_CAP, Field.REVENUE, Field.ANALYST_TARGET_MEAN}
+    {
+        Field.PRICE,
+        Field.MARKET_CAP,
+        Field.REVENUE,
+        Field.TOTAL_CASH,
+        Field.TOTAL_DEBT,
+        Field.ANALYST_TARGET_MEAN,
+    }
 )
 _PP_DRIFT_FIELDS = frozenset(
-    {Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE, Field.REVENUE_GROWTH}
+    {
+        Field.GROSS_MARGIN,
+        Field.OPERATING_MARGIN,
+        Field.FCF_MARGIN,
+        Field.ROE,
+        Field.REVENUE_GROWTH,
+        Field.DIVIDEND_YIELD,
+    }
 )
 
 
@@ -486,11 +556,18 @@ def _fmt_value(field: Field, value: float | str | date) -> str:
         return value.isoformat()
     if isinstance(value, str):
         return value
-    if field in (Field.MARKET_CAP, Field.REVENUE):
+    if field in (Field.MARKET_CAP, Field.REVENUE, Field.TOTAL_CASH, Field.TOTAL_DEBT):
         return _humanize_cap(value)
     if field is Field.ANALYST_COUNT:
         return f"{value:.0f}"
-    if field in (Field.GROSS_MARGIN, Field.OPERATING_MARGIN, Field.ROE, Field.REVENUE_GROWTH):
+    if field in (
+        Field.GROSS_MARGIN,
+        Field.OPERATING_MARGIN,
+        Field.FCF_MARGIN,
+        Field.ROE,
+        Field.REVENUE_GROWTH,
+        Field.DIVIDEND_YIELD,
+    ):
         return f"{value * 100:.1f}%"  # stored as a fraction; read as a percent
     return f"{value:.2f}"
 

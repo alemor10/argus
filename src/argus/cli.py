@@ -86,6 +86,7 @@ min_operating_margin_pct: 12.0
 min_roe_pct: 15.0             # quality floor: cheap must also be good
 max_debt_to_equity: 1.0
 max_eps_decline_pct: -30.0    # value-trap guard: revenue up + earnings collapsing = trap
+max_per_sector: 3             # shortlist concentration cap (0 disables) — no one-sector bets
 top_n: 15                     # shortlist size sent through enrichment + gates
 """
 

@@ -66,7 +66,7 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 | Fundamentals cross-check (US filers) | SEC EDGAR `companyfacts` | Free, official. Covers 20-F foreign filers (ASML) too. Symbology uses dashes (`BRK-B`). Needs a `User-Agent` header with contact email. NOT available for OTC ADRs or ETFs. |
 | Price cross-check | Finnhub free tier | 60 req/min with free API key; ample at watchlist scale. (Stooq is dead/blocked — do not use.) |
 | ETF full holdings (look-through) | SEC N-PORT filings | Free, monthly, all holdings with CUSIPs (VOO = 519 entries verified). Pain is trust→series→ticker mapping + CUSIP→ticker join (OpenFIGI free API). |
-| Bulk fundamentals (discovery) | **Paid — decision deferred to discovery phase** | Screening a universe from Yahoo is rate-limit-abusive and fragile — don't. Researched options (July 2026 prices): |
+| Bulk fundamentals (discovery) | **TradingView scanner (free, unofficial) — decided 2026-07-13** | Screening a universe from Yahoo is rate-limit-abusive and fragile — don't. Scout ships on the TV scanner behind a `Screener` protocol; paid options below remain the upgrade path (July 2026 prices): |
 
 ### Discovery data decision — DECIDED 2026-07-13: free screener path
 

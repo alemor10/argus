@@ -42,6 +42,7 @@ _POS = {
     "fwd_pe": 13,
     "roe": 14,
     "fcf_margin": 15,
+    "industry": 16,
 }
 
 GARBAGE_BODIES = (
@@ -63,6 +64,7 @@ def entry(s="NYSE:TEST", **overrides):
     d = [
         "TEST", "Test Corp", "Finance", 10.0, 5_000_000_000.0, 15.0, 1.2,
         8.0, 5.0, 40.0, 20.0, 0.5, 1_000_000.0, 12.5, 18.0, 15.0,
+        "Regional Banks",
     ]
     for key, value in overrides.items():
         d[_POS[key]] = value
@@ -111,10 +113,11 @@ class TestParseFixture:
         assert nvda.gross_margin_pct == pytest.approx(74.1454331711974)
         assert nvda.operating_margin_pct == pytest.approx(64.0200243795638)
         assert nvda.debt_to_equity == pytest.approx(0.0655534751424742)
-        assert nvda.avg_volume_30d == pytest.approx(159516837.10000005)
+        assert nvda.avg_volume_30d == pytest.approx(159522953.80000007)
         assert nvda.fwd_pe == pytest.approx(20.44827259165906)
         assert nvda.roe_pct == pytest.approx(114.288066963343)
         assert nvda.fcf_margin_pct == pytest.approx(46.97444879699871)
+        assert nvda.industry == "Semiconductors"
 
     def test_ticker_is_the_bare_symbol_not_the_company_name(self, rows):
         """TV's "name" column is the SYMBOL; the company name is
@@ -166,6 +169,21 @@ class TestParseFixture:
         assert tickers["ABBV"].fwd_pe is not None
         assert tickers["ABBV"].fcf_margin_pct is not None
 
+    def test_industry_maps_from_the_last_column(self, rows):
+        """`industry` is TV's fine-grained group — the peer-grouping key for
+        relative valuation, one level below `sector`."""
+        tickers = by_ticker(rows)
+        assert tickers["NVDA"].industry == "Semiconductors"
+        assert tickers["INTC"].industry == "Semiconductors"  # NVDA's peer
+        assert tickers["JPM"].industry == "Major Banks"
+        assert tickers["NVDA"].sector == "Electronic Technology"  # distinct axes
+
+    def test_no_recorded_row_nulls_industry(self, rows):
+        """The 2026-07-13 full response (1,515 rows) had no null industry
+        anywhere, so the fixture cannot carry one — the null path is covered
+        synthetically in TestParseFailureModes instead."""
+        assert all(row.industry is not None for row in rows)
+
     def test_rows_are_frozen(self, rows):
         with pytest.raises(ValidationError):
             rows[0].ticker = "HACKED"
@@ -212,16 +230,17 @@ class TestParseFailureModes:
     def test_wrong_length_d_is_skipped_even_when_symbol_slot_reads(self):
         """One slot off in either direction means the column contract shifted
         for that row — every index after the shift would be silently wrong.
-        Exactly 16 (the 13 originals + the three Quality-GARP columns) parses."""
-        sixteen = entry()
-        assert len(sixteen["d"]) == 16
-        seventeen = {"s": "NYSE:TEST", "d": sixteen["d"] + [99.9]}
-        fifteen = {"s": "NYSE:TEST", "d": sixteen["d"][:-1]}
-        thirteen = {"s": "NYSE:TEST", "d": sixteen["d"][:13]}  # the pre-1.2 shape
+        Exactly 17 (the 13 originals + three Quality-GARP columns + industry)
+        parses."""
+        seventeen = entry()
+        assert len(seventeen["d"]) == 17
+        eighteen = {"s": "NYSE:TEST", "d": seventeen["d"] + [99.9]}
+        sixteen = {"s": "NYSE:TEST", "d": seventeen["d"][:-1]}  # the pre-1.3 shape
+        thirteen = {"s": "NYSE:TEST", "d": seventeen["d"][:13]}  # the pre-1.2 shape
         screener = TradingViewScreener()
-        assert screener.parse(payload(seventeen, fifteen, thirteen)) == []
+        assert screener.parse(payload(eighteen, sixteen, thirteen)) == []
         assert screener.last_skipped == 3
-        assert len(screener.parse(payload(sixteen))) == 1
+        assert len(screener.parse(payload(seventeen))) == 1
         assert screener.last_skipped == 0
 
     def test_last_skipped_resets_on_every_parse(self):
@@ -258,6 +277,17 @@ class TestParseFailureModes:
         [row] = TradingViewScreener().parse(payload(entry(description=None, sector=42)))
         assert row.company is None
         assert row.sector is None
+
+    def test_null_industry_becomes_none(self):
+        """No recorded row nulls industry (see the fixture test), but the
+        column is nullable like every other — synthetic coverage here."""
+        [row] = TradingViewScreener().parse(payload(entry(industry=None)))
+        assert row.industry is None
+        assert row.sector == "Finance"  # neighbors unharmed
+
+    def test_non_string_industry_becomes_none(self):
+        [row] = TradingViewScreener().parse(payload(entry(industry=42)))
+        assert row.industry is None
 
 
 # --- scan(): the one POST, the ctor timeout, the loud failures ----------------
@@ -299,13 +329,14 @@ class TestScan:
         assert body["sort"] == {"sortBy": "market_cap_basic", "sortOrder": "desc"}
         assert body["range"] == [0, 8000]
         assert body["columns"][0] == "name"
-        assert len(body["columns"]) == 16
-        # The Quality-GARP columns ride at the END — the fixture's d arrays
+        assert len(body["columns"]) == 17
+        # The appended columns ride at the END — the fixture's d arrays
         # are index-mapped, so column order IS the wire contract.
         assert body["columns"][13:] == [
             "price_earnings_fwd",
             "return_on_equity",
             "free_cash_flow_margin_ttm",
+            "industry",
         ]
         # The similarly-named identifier that exists but returns null must
         # never sneak in: it would silently None every fwd_pe.
@@ -376,6 +407,7 @@ class TestScreenerRow:
         assert row.fwd_pe is None
         assert row.roe_pct is None
         assert row.fcf_margin_pct is None
+        assert row.industry is None
 
     def test_frozen(self):
         row = ScreenerRow(ticker="NVDA", exchange="NASDAQ")

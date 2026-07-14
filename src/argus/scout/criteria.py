@@ -32,6 +32,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from argus.scout.screener import ScreenerRow
+from argus.scout.sectors import CANONICAL_SECTORS, OTHER, canonical_sector
 
 
 class ScoutCriteria(BaseModel):
@@ -55,7 +56,8 @@ class ScoutCriteria(BaseModel):
     min_roe_pct: float = 15.0
     max_debt_to_equity: float = 1.0
     max_eps_decline_pct: float = -30.0  # value-trap guard: TTM EPS trend must stay above
-    top_n: int = 15
+    max_per_sector: int = 3  # shortlist concentration cap (0 disables) — a single-metric
+    top_n: int = 15  #          ranking otherwise becomes one sector bet wearing 15 tickers
 
 
 def load_scout_criteria(path: Path) -> ScoutCriteria:
@@ -69,23 +71,38 @@ def load_scout_criteria(path: Path) -> ScoutCriteria:
 
 
 class ScreenedCandidate(BaseModel):
-    """One screener row that passed EVERY rule, with its rank and the
-    per-rule pass reasons (actual values included) — these become the
-    `screen_reasons` JSON in scout_candidates, labeled as screener claims."""
+    """One screener row that passed EVERY rule, with its global passer rank,
+    canonical sector, and the per-rule pass reasons (actual values included)
+    — these become the `screen_reasons` JSON in scout_candidates, labeled as
+    screener claims."""
 
     model_config = ConfigDict(frozen=True)
 
     row: ScreenerRow
-    rank: int  # 1-based, assigned after sorting
+    rank: int  # 1-based GLOBAL rank among all passers (pre-cap, pre-top_n)
+    sector: str  # canonical (sectors.CANONICAL_SECTORS or "Other")
     reasons: dict[str, str]  # rule -> human string; insertion order = rule order
+
+
+class ScreenResult(BaseModel):
+    """The screen's two outputs: the capped shortlist (goes on to enrichment
+    and gating) and the sector leaders — the best passer from each sector
+    that has NO representative in the shortlist, shown for category coverage
+    without enrichment. An empty sector is information, never padded."""
+
+    model_config = ConfigDict(frozen=True)
+
+    shortlist: tuple[ScreenedCandidate, ...] = ()
+    sector_leaders: tuple[ScreenedCandidate, ...] = ()
 
 
 def screen(
     rows: Sequence[ScreenerRow],
     criteria: ScoutCriteria,
     exclude: AbstractSet[str],
-) -> list[ScreenedCandidate]:
-    """Apply the local rules to screener rows; return the ranked shortlist.
+) -> ScreenResult:
+    """Apply the local rules to screener rows; return the ranked shortlist
+    plus sector leaders.
 
     - `exclude` (watchlist tickers, compared case-insensitively on the bare
       symbol) is dropped before any rule runs — scout never proposes names
@@ -93,8 +110,13 @@ def screen(
     - A row passes only if EVERY rule passes; a None metric fails its rule.
     - Passers are ranked forward-PEG ascending (fwd P/E over revenue growth
       — cheap FOR ITS GROWTH first, never naive low-P/E), market cap
-      descending on ties, then ticker alphabetical, and the list is capped
-      to criteria.top_n.
+      descending on ties, then ticker alphabetical. `rank` is this GLOBAL
+      position.
+    - Shortlist selection walks the global ranking, skipping names whose
+      canonical sector already holds `max_per_sector` slots (0 disables the
+      cap), until `top_n` names are chosen.
+    - Sector leaders: the single best passer of each sector with zero
+      shortlist representation.
     """
     excluded = {_bare_symbol(ticker) for ticker in exclude}
     passers: list[tuple[ScreenerRow, dict[str, str]]] = []
@@ -105,10 +127,34 @@ def screen(
         if reasons is not None:
             passers.append((row, reasons))
     passers.sort(key=lambda pair: _rank_key(pair[0]))
-    return [
-        ScreenedCandidate(row=row, rank=rank, reasons=reasons)
-        for rank, (row, reasons) in enumerate(passers[: max(criteria.top_n, 0)], start=1)
+    ranked = [
+        ScreenedCandidate(
+            row=row, rank=rank, sector=canonical_sector(row.sector), reasons=reasons
+        )
+        for rank, (row, reasons) in enumerate(passers, start=1)
     ]
+
+    shortlist: list[ScreenedCandidate] = []
+    per_sector: dict[str, int] = {}
+    for candidate in ranked:
+        if len(shortlist) >= max(criteria.top_n, 0):
+            break
+        taken = per_sector.get(candidate.sector, 0)
+        if criteria.max_per_sector > 0 and taken >= criteria.max_per_sector:
+            continue
+        per_sector[candidate.sector] = taken + 1
+        shortlist.append(candidate)
+
+    represented = {candidate.sector for candidate in shortlist}
+    leaders: list[ScreenedCandidate] = []
+    seen_sectors: set[str] = set()
+    for candidate in ranked:
+        if candidate.sector in represented or candidate.sector in seen_sectors:
+            continue
+        seen_sectors.add(candidate.sector)
+        leaders.append(candidate)
+
+    return ScreenResult(shortlist=tuple(shortlist), sector_leaders=tuple(leaders))
 
 
 def _pass_reasons(row: ScreenerRow, criteria: ScoutCriteria) -> dict[str, str] | None:

@@ -4,12 +4,16 @@ degradation on missing/None history and malformed snapshot values, and byte
 determinism (CreationDate is suppressed via PdfPages metadata, so identical
 inputs must yield identical bytes). The business block, the why-it-surfaced
 narrative (a fixed factual template — asserted by exact match, so no wording
-can drift into opinion), and the revenue panel are covered here too; text
-that ends up compressed inside PDF streams is asserted at the pure-helper
-seam instead. Fixtures are built directly from models.py types, following
-tests/test_render.py — no DB, no network."""
+can drift into opinion), the sector-grouped summary (grouping, leaders strip,
+data-health rollups), the industry-peers line, and the revenue panel with its
+fiscal-year caption are covered here too; text that ends up compressed inside
+PDF streams is asserted at the pure-helper seam instead. Fixtures are built
+directly from models.py types, following tests/test_render.py — no DB, no
+network."""
 
 from datetime import UTC, date, datetime, timedelta
+
+import matplotlib.pyplot as plt
 
 from argus.fields import Field, QuarantineCode, Source
 from argus.models import (
@@ -25,7 +29,18 @@ from argus.models import (
     TickerContext,
     TickerReport,
 )
-from argus.report_pdf import _fmt_value, _identity_line, _why_surfaced, build_pdf
+from argus.report_pdf import (
+    _FISCAL_YEAR_CAPTION,
+    _fmt_value,
+    _health_lines,
+    _identity_line,
+    _leader_line,
+    _peer_line,
+    _revenue_chart,
+    _sector_groups,
+    _why_surfaced,
+    build_pdf,
+)
 
 NOW = datetime(2026, 7, 12, 14, 3, tzinfo=UTC)
 BASELINE_AT = datetime(2026, 6, 28, 13, 0, tzinfo=UTC)
@@ -82,11 +97,22 @@ def _garp_values(price=181.25):
     }
 
 
-def _proposal(ticker, rank, *, streak=1, status="proposed", reason=None):
+def _proposal(
+    ticker,
+    rank,
+    *,
+    streak=1,
+    status="proposed",
+    reason=None,
+    sector="Other",
+    peer_context=None,
+    metrics=None,
+):
     return ScoutProposal(
         ticker=ticker,
         rank=rank,
         status=status,
+        sector=sector,
         exclusion_reason=reason,
         screen_reasons={
             "fwd_pe": "fwd_pe 18.4 <= 25",
@@ -94,9 +120,26 @@ def _proposal(ticker, rank, *, streak=1, status="proposed", reason=None):
             "roe": "roe 24 >= 15",
             "debt_to_equity": "debt_to_equity 0.42 <= 1.5",
         },
-        screener_metrics={"fwd_pe": 18.4, "revenue_growth_pct": 12.5, "roe_pct": 24.0},
+        screener_metrics=(
+            metrics
+            if metrics is not None
+            else {"fwd_pe": 18.4, "revenue_growth_pct": 12.5, "roe_pct": 24.0}
+        ),
+        peer_context=peer_context,
         streak=streak,
     )
+
+
+_PEER_CONTEXT = {
+    "industry": "Semiconductors",
+    "n": 12,
+    "median_fwd_pe": 28.4,
+    "peers": [
+        {"ticker": "AVGO", "fwd_pe": 32.1},
+        {"ticker": "AMD", "fwd_pe": 29.9},
+        {"ticker": "INTC", "fwd_pe": None},
+    ],
+}
 
 
 def _scout_report(proposals, tickers, *, status="complete", notes=None):
@@ -122,6 +165,60 @@ def _two_proposal_report() -> RunReport:
         _proposal("CCC", 3, status="excluded", reason="fwd P/E quarantined: cross-source disagreement"),
     ]
     return _scout_report(proposals, tickers)
+
+
+def _rich_values(price=181.25):
+    """A snapshot exercising every v1.3 panel field, six new ones included."""
+    values = _garp_values(price)
+    values.update(
+        {
+            Field.REVENUE_GROWTH: _fv(Field.REVENUE_GROWTH, 0.125),
+            Field.FCF_MARGIN: _fv(Field.FCF_MARGIN, 0.284),
+            Field.TOTAL_CASH: _fv(Field.TOTAL_CASH, 96_100_000_000.0),
+            Field.TOTAL_DEBT: _fv(Field.TOTAL_DEBT, 12_400_000_000.0),
+            Field.EV_EBITDA: _fv(Field.EV_EBITDA, 14.2),
+            Field.DIVIDEND_YIELD: _fv(Field.DIVIDEND_YIELD, 0.012),
+            Field.BETA: _fv(Field.BETA, 1.13),
+        }
+    )
+    return values
+
+
+def _multi_sector_report(*, notes=None) -> RunReport:
+    """Three sectors on the shortlist, one leader beyond it, one exclusion,
+    one failed enrichment ticker, one finnhub error — the full v1.3 summary
+    page in one fixture."""
+    tickers = [
+        _ticker_report("AAA", _rich_values(181.25), profile=_profile("AAA")),
+        _ticker_report(
+            "BBB",
+            _garp_values(64.10),
+            profile=_profile(
+                "BBB", name="Beta Bioworks plc", sector="Healthcare",
+                industry="Biotechnology", employees=410,
+            ),
+            sources=(
+                SourceHealth(source=Source.YAHOO, status="ok"),
+                SourceHealth(source=Source.FINNHUB, status="error", error="HTTP 502"),
+            ),
+        ),
+        _ticker_report("CCC", _garp_values(23.05)),
+        TickerReport(
+            context=TickerContext(ticker="DDD"),
+            status="failed",
+            error="HTTP 429 from yahoo",
+        ),
+    ]
+    proposals = [
+        _proposal("AAA", 1, streak=3, sector="Technology", peer_context=_PEER_CONTEXT),
+        _proposal("BBB", 2, sector="Healthcare"),
+        _proposal("CCC", 4, sector="Technology"),
+        _proposal("EEE", 3, status="excluded", reason="price quarantined: non_finite"),
+        _proposal(
+            "FFF", 5, status="leader", sector="Energy", metrics={"fwd_pe": 9.8}
+        ),
+    ]
+    return _scout_report(proposals, tickers, notes=notes)
 
 
 def _synthetic_history(n=52, base=100.0):
@@ -474,6 +571,189 @@ class TestRevenueFormatting:
         assert _fmt_value(Field.REVENUE_GROWTH, float("inf")) == "—"
 
 
+class TestNewFieldFormatting:
+    """The six v1.3 fields follow the digest's conventions exactly: fraction
+    fields read as percents, dollar magnitudes humanize, ratios print 2dp."""
+
+    def test_fraction_fields_render_as_percents(self):
+        assert _fmt_value(Field.DIVIDEND_YIELD, 0.012) == "1.2%"
+        assert _fmt_value(Field.FCF_MARGIN, 0.284) == "28.4%"
+
+    def test_dollar_fields_humanize_like_market_cap(self):
+        assert _fmt_value(Field.TOTAL_CASH, 96_100_000_000.0) == "96.1B"
+        assert _fmt_value(Field.TOTAL_DEBT, 12_400_000_000.0) == "12.4B"
+
+    def test_ratio_fields_render_two_decimals(self):
+        assert _fmt_value(Field.EV_EBITDA, 14.2) == "14.20"
+        assert _fmt_value(Field.BETA, 1.13) == "1.13"
+
+    def test_detail_page_renders_all_21_panel_fields(self):
+        report = _scout_report(
+            [_proposal("AAA", 1)], [_ticker_report("AAA", _rich_values())]
+        )
+        pdf = build_pdf(report, {"AAA": _synthetic_history()}, {"AAA": _synthetic_revenue()})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 2
+
+
+class TestGroupedSummary:
+    def test_sector_groups_order_by_best_rank_then_name(self):
+        proposed = [
+            _proposal("AAA", 1, sector="Technology"),
+            _proposal("BBB", 2, sector="Healthcare"),
+            _proposal("CCC", 4, sector="Technology"),
+            _proposal("DDD", 6, sector="Energy"),
+        ]
+        groups = [(s, [p.ticker for p in g]) for s, g in _sector_groups(proposed)]
+        assert groups == [
+            ("Technology", ["AAA", "CCC"]),
+            ("Healthcare", ["BBB"]),
+            ("Energy", ["DDD"]),
+        ]
+
+    def test_missing_sector_falls_back_to_other(self):
+        [(sector, group)] = _sector_groups([_proposal("AAA", 1, sector="")])
+        assert sector == "Other"
+        assert [p.ticker for p in group] == ["AAA"]
+
+    def test_multi_sector_report_renders_grouped_summary(self):
+        pdf = build_pdf(
+            _multi_sector_report(),
+            {"AAA": _synthetic_history(), "BBB": _synthetic_history(base=50.0)},
+            {"AAA": _synthetic_revenue()},
+        )
+        assert pdf.startswith(b"%PDF")
+        # 3 proposed detail pages + summary; the leader and the exclusion
+        # appear on the summary only.
+        assert _page_count(pdf) == 4
+
+
+class TestLeadersStrip:
+    def test_leader_line_is_the_exact_template(self):
+        leader = _proposal(
+            "FFF", 5, status="leader", sector="Energy", metrics={"fwd_pe": 9.8}
+        )
+        assert _leader_line(leader) == "Energy — FFF (claimed fwd P/E 9.8, #5 overall)"
+
+    def test_leader_line_without_claimed_fwd_pe_degrades_to_rank(self):
+        leader = _proposal("FFF", 5, status="leader", sector="Energy", metrics={})
+        assert _leader_line(leader) == "Energy — FFF (#5 overall)"
+        junk = _proposal(
+            "GGG", 7, status="leader", sector="Utilities",
+            metrics={"fwd_pe": float("nan")},
+        )
+        assert _leader_line(junk) == "Utilities — GGG (#7 overall)"
+
+    def test_leaders_get_no_detail_pages(self):
+        # Two proposed + one leader + one excluded → 3 pages: the leader is a
+        # summary-strip line only (never enriched, nothing verified to show).
+        proposals = [
+            _proposal("AAA", 1, sector="Technology"),
+            _proposal("BBB", 2, sector="Healthcare"),
+            _proposal("CCC", 3, status="excluded", reason="price quarantined: non_finite"),
+            _proposal("FFF", 4, status="leader", sector="Energy", metrics={"fwd_pe": 9.8}),
+        ]
+        tickers = [
+            _ticker_report("AAA", _garp_values()),
+            _ticker_report("BBB", _garp_values(64.10)),
+        ]
+        pdf = build_pdf(_scout_report(proposals, tickers), {})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 3
+
+
+class TestDataHealthBlock:
+    def test_rollups_first_error_skipped_checks_and_note(self):
+        report = _multi_sector_report(notes="screener degraded: 2 retries")
+        lines = [text for text, _tone in _health_lines(report)]
+        assert lines == [
+            "yahoo: 3 ok",
+            "edgar: not configured — its cross-checks never ran",
+            "finnhub: 2 ok, 1 error (first: HTTP 502) — price cross-checks skipped (1 ticker)",
+            "Failed tickers:",
+            "  DDD: HTTP 429 from yahoo",
+            "Run note: screener degraded: 2 retries",
+        ]
+
+    def test_no_sources_recorded_is_stated_not_blank(self):
+        report = _scout_report([], [], status="failed", notes="screener unavailable: HTTP 503")
+        lines = [text for text, _tone in _health_lines(report)]
+        assert lines == [
+            "No source health recorded.",
+            "Run note: screener unavailable: HTTP 503",
+        ]
+
+    def test_health_block_renders_on_summary_page(self):
+        pdf = build_pdf(_multi_sector_report(notes="screener degraded: 2 retries"), {})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 4
+
+
+class TestPeersLine:
+    """The peers line is a fixed template over peer_context (screener claims)
+    plus the one gate-verified number — exact-matched at the helper seam, the
+    same discipline as the why-surfaced narrative."""
+
+    def test_line_is_the_exact_template(self):
+        proposal = _proposal("AAA", 1, peer_context=_PEER_CONTEXT)
+        snapshot = _snapshot("AAA", {Field.PE_FWD: _fv(Field.PE_FWD, 18.4)})
+        assert _peer_line(proposal, snapshot) == (
+            "Semiconductors (n=12) — median fwd P/E 28.4 · "
+            "AVGO 32.1, AMD 29.9, INTC — · AAA (verified) 18.4"
+        )
+
+    def test_unverified_own_fwd_pe_is_a_dash_not_a_claim(self):
+        proposal = _proposal("AAA", 1, peer_context=_PEER_CONTEXT)
+        assert _peer_line(proposal, None) == (
+            "Semiconductors (n=12) — median fwd P/E 28.4 · "
+            "AVGO 32.1, AMD 29.9, INTC — · AAA (verified) —"
+        )
+
+    def test_none_or_empty_context_is_omitted_silently(self):
+        assert _peer_line(_proposal("AAA", 1), None) is None
+        assert _peer_line(_proposal("AAA", 1, peer_context={}), None) is None
+
+    def test_malformed_context_degrades_field_by_field(self):
+        context = {
+            "industry": None,
+            "n": "twelve",
+            "median_fwd_pe": float("inf"),
+            "peers": [{"ticker": ""}, "junk", {"ticker": "AVGO", "fwd_pe": "n/a"}],
+        }
+        proposal = _proposal("AAA", 1, peer_context=context)
+        assert _peer_line(proposal, None) == (
+            "industry unknown — median fwd P/E — · AVGO — · AAA (verified) —"
+        )
+
+    def test_peers_line_renders_on_detail_page(self):
+        report = _scout_report(
+            [_proposal("AAA", 1, peer_context=_PEER_CONTEXT)],
+            [_ticker_report("AAA", _rich_values())],
+        )
+        pdf = build_pdf(report, {"AAA": _synthetic_history()})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 2
+
+
+class TestFiscalYearCaption:
+    def test_rendered_revenue_chart_carries_the_caption(self):
+        fig = plt.figure(figsize=(8.5, 11.0))
+        try:
+            _revenue_chart(fig, (0.665, 0.435, 0.275, 0.165), _synthetic_revenue())
+            assert _FISCAL_YEAR_CAPTION == "fiscal years — TTM revenue in the panel may differ"
+            assert fig.axes[0].get_xlabel() == _FISCAL_YEAR_CAPTION
+        finally:
+            plt.close(fig)
+
+    def test_unavailable_panel_carries_no_caption(self):
+        fig = plt.figure(figsize=(8.5, 11.0))
+        try:
+            _revenue_chart(fig, (0.665, 0.435, 0.275, 0.165), None)
+            assert fig.axes == []  # the unavailable note is a figure patch, not a chart
+        finally:
+            plt.close(fig)
+
+
 class TestDeterminism:
     def test_same_inputs_yield_identical_bytes(self):
         # CreationDate is the one nondeterministic thing matplotlib embeds;
@@ -489,6 +769,15 @@ class TestDeterminism:
         ]
         report = _scout_report([_proposal("AAA", 1, streak=3), _proposal("BBB", 2)], tickers)
         history = {"AAA": _synthetic_history(), "BBB": None}
+        revenue = {"AAA": _synthetic_revenue(), "BBB": None}
+        assert build_pdf(report, history, revenue) == build_pdf(report, history, revenue)
+
+    def test_v13_summary_and_peers_features_yield_identical_bytes(self):
+        # Sector bands, the leaders strip, the data-health block, the peers
+        # line, and the fiscal-year caption must all be as deterministic as
+        # everything that came before them.
+        report = _multi_sector_report(notes="screener degraded: 2 retries")
+        history = {"AAA": _synthetic_history(), "BBB": _synthetic_history(base=50.0), "CCC": None}
         revenue = {"AAA": _synthetic_revenue(), "BBB": None}
         assert build_pdf(report, history, revenue) == build_pdf(report, history, revenue)
 

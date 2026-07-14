@@ -4,12 +4,14 @@ Status: PARTIAL — some tickers or sources failed this run; degradation is deta
 
 ## Proposals
 
-| # | Ticker | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| 1 | CLEANCO | 2w | 100.00 | 14.80 | 55.0% | — | — | — |
+| # | Ticker | Sector | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1 | CLEANCO | Technology | 2w | 100.00 | 14.80 | 55.0% | — | — | — |
+
+_'#' is the global screen rank; gaps are names excluded after enrichment or sector-capped._
 
 Screen (screener claims, verified independently above):
-- **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30%
+- **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30% · vs industry median fwd P/E 15 (Widgets, n=3)
 
 ## Excluded after enrichment
 

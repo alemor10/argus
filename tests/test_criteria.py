@@ -55,7 +55,11 @@ def make_row(**overrides) -> ScreenerRow:
 
 
 def screen_one(row: ScreenerRow, **criteria_overrides) -> list[ScreenedCandidate]:
-    return screen([row], ScoutCriteria(**criteria_overrides), exclude=frozenset())
+    return list(screen([row], ScoutCriteria(**criteria_overrides), exclude=frozenset()).shortlist)
+
+
+def shortlist(rows, criteria, exclude):
+    return list(screen(rows, criteria, exclude).shortlist)
 
 
 # --- rule boundaries (floors and ceilings inclusive; fwd_pe > 0 strict;
@@ -122,7 +126,7 @@ def test_none_metric_fails_its_rule(metric):
 
 def test_one_failing_rule_drops_the_row_entirely():
     rows = [make_row(ticker="FAIL", fwd_pe=30.0), make_row(ticker="PASS")]
-    candidates = screen(rows, ScoutCriteria(), exclude=frozenset())
+    candidates = shortlist(rows, ScoutCriteria(), exclude=frozenset())
     assert [c.row.ticker for c in candidates] == ["PASS"]
 
 
@@ -191,7 +195,7 @@ def test_reasons_are_json_serializable_and_ordered():
 
 def test_exclusion_is_case_insensitive():
     rows = [make_row(ticker="NVDA"), make_row(ticker="msft"), make_row(ticker="AAPL")]
-    candidates = screen(rows, ScoutCriteria(), exclude={"nvda", "MSFT"})
+    candidates = shortlist(rows, ScoutCriteria(), exclude={"nvda", "MSFT"})
     assert [c.row.ticker for c in candidates] == ["AAPL"]
 
 
@@ -199,8 +203,8 @@ def test_exclusion_bridges_dotted_and_dashed_class_shares():
     """Review finding: a watched BRK-B (house dash symbology) must exclude
     TradingView's dotted BRK.B row — and the reverse spelling too. Without
     dot/dash canonicalization scout proposed names already held."""
-    assert screen([make_row(ticker="BRK.B")], ScoutCriteria(), exclude={"BRK-B"}) == []
-    assert screen([make_row(ticker="BRK-B")], ScoutCriteria(), exclude={"BRK.B"}) == []
+    assert shortlist([make_row(ticker="BRK.B")], ScoutCriteria(), exclude={"BRK-B"}) == []
+    assert shortlist([make_row(ticker="BRK-B")], ScoutCriteria(), exclude={"BRK.B"}) == []
 
 
 def test_excluded_rows_do_not_consume_ranks_or_top_n_slots():
@@ -209,7 +213,7 @@ def test_excluded_rows_do_not_consume_ranks_or_top_n_slots():
         make_row(ticker="AAA", fwd_pe=12.0),
         make_row(ticker="BBB", fwd_pe=18.0),
     ]
-    candidates = screen(rows, ScoutCriteria(top_n=2), exclude={"held"})
+    candidates = shortlist(rows, ScoutCriteria(top_n=2), exclude={"held"})
     assert [(c.row.ticker, c.rank) for c in candidates] == [("AAA", 1), ("BBB", 2)]
 
 
@@ -225,7 +229,7 @@ def test_ranking_forward_peg_ascending_with_tiebreaks():
         make_row(ticker="BBB", fwd_pe=24.0, revenue_growth_ttm_pct=20.0, market_cap=9e10),  # full tie → alpha
         make_row(ticker="AAA", fwd_pe=21.0, revenue_growth_ttm_pct=15.0, market_cap=9e11),  # 1.4
     ]
-    candidates = screen(rows, ScoutCriteria(), exclude=frozenset())
+    candidates = shortlist(rows, ScoutCriteria(max_per_sector=0), exclude=frozenset())
     assert [(c.row.ticker, c.rank) for c in candidates] == [
         ("ZZZ", 1),
         ("BBB", 2),
@@ -242,7 +246,7 @@ def test_ranking_is_growth_adjusted_not_naive_low_pe():
         make_row(ticker="SLOW", fwd_pe=12.0, revenue_growth_ttm_pct=10.0),  # 1.2
         make_row(ticker="FAST", fwd_pe=24.0, revenue_growth_ttm_pct=60.0),  # 0.4
     ]
-    candidates = screen(rows, ScoutCriteria(), exclude=frozenset())
+    candidates = shortlist(rows, ScoutCriteria(), exclude=frozenset())
     assert [c.row.ticker for c in candidates] == ["FAST", "SLOW"]
 
 
@@ -252,8 +256,8 @@ def test_ranking_is_input_order_independent():
         make_row(ticker="BBB", fwd_pe=18.0),
         make_row(ticker="AAA", fwd_pe=18.0),
     ]
-    forward = screen(rows, ScoutCriteria(), exclude=frozenset())
-    backward = screen(list(reversed(rows)), ScoutCriteria(), exclude=frozenset())
+    forward = shortlist(rows, ScoutCriteria(max_per_sector=0), exclude=frozenset())
+    backward = shortlist(list(reversed(rows)), ScoutCriteria(max_per_sector=0), exclude=frozenset())
     assert forward == backward
     assert [c.row.ticker for c in forward] == ["ZZZ", "AAA", "BBB"]
 
@@ -268,7 +272,7 @@ def test_shrinking_passer_under_permissive_floor_ranks_last_not_first():
         make_row(ticker="ZERO", fwd_pe=1.0, revenue_growth_ttm_pct=0.0),
         make_row(ticker="GROW", fwd_pe=20.0, revenue_growth_ttm_pct=20.0),
     ]
-    candidates = screen(rows, ScoutCriteria(min_revenue_growth_pct=-50.0), exclude=frozenset())
+    candidates = shortlist(rows, ScoutCriteria(min_revenue_growth_pct=-50.0, max_per_sector=0), exclude=frozenset())
     assert [c.row.ticker for c in candidates] == ["GROW", "SHRK", "ZERO"]
 
 
@@ -277,7 +281,7 @@ def test_top_n_caps_after_ranking():
         make_row(ticker=f"T{i:02d}", fwd_pe=10.0 + i / 2, revenue_growth_ttm_pct=20.0)
         for i in range(20)
     ]
-    candidates = screen(rows, ScoutCriteria(top_n=3), exclude=frozenset())
+    candidates = shortlist(rows, ScoutCriteria(top_n=3, max_per_sector=0), exclude=frozenset())
     assert [(c.row.ticker, c.rank) for c in candidates] == [
         ("T00", 1),
         ("T01", 2),
@@ -334,3 +338,55 @@ def test_criteria_model_is_frozen():
     criteria = ScoutCriteria()
     with pytest.raises(ValidationError):
         criteria.max_forward_pe = 9.9
+
+
+# --- sector cap + leaders (v1.3): concentration control and category coverage
+
+
+def test_sector_cap_limits_concentration_and_fills_from_other_sectors():
+    """4 cheap Technology names + 1 pricier Finance name, cap 3: the fourth
+    tech name yields its slot to the finance one."""
+    rows = [
+        make_row(ticker="T1", fwd_pe=10.0, sector="Technology Services"),
+        make_row(ticker="T2", fwd_pe=11.0, sector="Technology Services"),
+        make_row(ticker="T3", fwd_pe=12.0, sector="Electronic Technology"),  # same bucket
+        make_row(ticker="T4", fwd_pe=13.0, sector="Technology Services"),
+        make_row(ticker="F1", fwd_pe=20.0, sector="Finance"),
+    ]
+    result = screen(rows, ScoutCriteria(top_n=4, max_per_sector=3), exclude=frozenset())
+    assert [c.row.ticker for c in result.shortlist] == ["T1", "T2", "T3", "F1"]
+    assert [c.sector for c in result.shortlist] == [
+        "Technology", "Technology", "Technology", "Financial Services",
+    ]
+    assert result.shortlist[3].rank == 5  # global rank survives the cap
+
+
+def test_sector_cap_zero_disables():
+    rows = [make_row(ticker=f"T{i}", fwd_pe=10.0 + i, sector="Finance") for i in range(5)]
+    result = screen(rows, ScoutCriteria(top_n=5, max_per_sector=0), exclude=frozenset())
+    assert len(result.shortlist) == 5
+
+
+def test_sector_leaders_cover_unrepresented_sectors_only():
+    rows = [
+        make_row(ticker="T1", fwd_pe=10.0, sector="Technology Services"),
+        make_row(ticker="T2", fwd_pe=11.0, sector="Technology Services"),
+        make_row(ticker="H1", fwd_pe=18.0, sector="Health Technology"),
+        make_row(ticker="H2", fwd_pe=19.0, sector="Health Services"),  # same bucket as H1
+        make_row(ticker="E1", fwd_pe=22.0, sector="Energy Minerals"),
+    ]
+    result = screen(rows, ScoutCriteria(top_n=2, max_per_sector=3), exclude=frozenset())
+    assert [c.row.ticker for c in result.shortlist] == ["T1", "T2"]
+    # Healthcare and Energy passed but missed the shortlist: one leader each,
+    # the best of the bucket; Technology is represented, so no tech leader.
+    assert [(c.sector, c.row.ticker) for c in result.sector_leaders] == [
+        ("Healthcare", "H1"), ("Energy", "E1"),
+    ]
+
+
+def test_empty_sector_is_information_not_padding():
+    """No quota filling: a sector with zero passers appears nowhere."""
+    rows = [make_row(ticker="T1", fwd_pe=10.0, sector="Technology Services")]
+    result = screen(rows, ScoutCriteria(), exclude=frozenset())
+    sectors = {c.sector for c in result.shortlist} | {c.sector for c in result.sector_leaders}
+    assert sectors == {"Technology"}

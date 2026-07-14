@@ -67,6 +67,8 @@ _COLUMNS: tuple[str, ...] = (
     "price_earnings_fwd",
     "return_on_equity",  # percent (NVDA reported 114.29)
     "free_cash_flow_margin_ttm",  # percent
+    # v1.3 (verified live 2026-07-14): peer grouping + relative valuation.
+    "industry",
 )
 _IDX = {column: i for i, column in enumerate(_COLUMNS)}
 
@@ -101,6 +103,7 @@ class ScreenerRow(BaseModel):
     fwd_pe: float | None = None
     roe_pct: float | None = None  # percent
     fcf_margin_pct: float | None = None  # percent
+    industry: str | None = None  # TV's fine-grained group ("Semiconductors")
 
 
 @runtime_checkable
@@ -232,6 +235,7 @@ def _parse_row(entry: Any) -> ScreenerRow | None:
         fwd_pe=_num(d[_IDX["price_earnings_fwd"]]),
         roe_pct=_num(d[_IDX["return_on_equity"]]),
         fcf_margin_pct=_num(d[_IDX["free_cash_flow_margin_ttm"]]),
+        industry=_text(d[_IDX["industry"]]),
     )
 
 

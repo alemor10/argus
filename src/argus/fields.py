@@ -27,8 +27,14 @@ class Field(StrEnum):
     PEG = "peg"
     GROSS_MARGIN = "gross_margin"
     OPERATING_MARGIN = "operating_margin"
+    FCF_MARGIN = "fcf_margin"
     ROE = "roe"
     DEBT_TO_EQUITY = "debt_to_equity"
+    TOTAL_CASH = "total_cash"
+    TOTAL_DEBT = "total_debt"
+    EV_EBITDA = "ev_ebitda"
+    DIVIDEND_YIELD = "dividend_yield"
+    BETA = "beta"
     NEXT_EARNINGS_DATE = "next_earnings_date"
     ANALYST_RATING = "analyst_rating"
     ANALYST_TARGET_MEAN = "analyst_target_mean"
@@ -99,6 +105,7 @@ SPECS: dict[Field, FieldSpec] = {
         cross_source_rel_tol=_FUNDAMENTAL_TOL,
         priority=(Source.YAHOO, Source.EDGAR),
     ),
+    Field.FCF_MARGIN: FieldSpec("num", bounds=(-10.0, 1.5)),  # fraction; FCF can top earnings
     Field.ROE: FieldSpec(
         "num",
         bounds=(-100.0, 100.0),  # a fraction; extreme leverage makes wild ROEs real
@@ -109,6 +116,11 @@ SPECS: dict[Field, FieldSpec] = {
         cross_source_rel_tol=_FUNDAMENTAL_TOL,
         priority=(Source.YAHOO, Source.EDGAR),
     ),
+    Field.TOTAL_CASH: FieldSpec("num", bounds=(0, 1e13)),
+    Field.TOTAL_DEBT: FieldSpec("num", bounds=(0, 1e13)),
+    Field.EV_EBITDA: FieldSpec("num", bounds=(-1_000, 1_000)),
+    Field.DIVIDEND_YIELD: FieldSpec("num", bounds=(0, 0.5)),  # fraction; 50% is a red flag anyway
+    Field.BETA: FieldSpec("num", bounds=(-10, 10)),
     Field.NEXT_EARNINGS_DATE: FieldSpec("date", not_in_past=True),
     Field.ANALYST_RATING: FieldSpec("text"),
     Field.ANALYST_TARGET_MEAN: FieldSpec("num", bounds=(0.0001, 10_000_000)),

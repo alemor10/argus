@@ -119,11 +119,13 @@ CREATE TABLE company_profiles (
 CREATE TABLE scout_candidates (
     run_id           INTEGER NOT NULL REFERENCES runs(run_id),
     ticker           TEXT    NOT NULL,
-    rank             INTEGER NOT NULL,
-    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded')),
+    rank             INTEGER NOT NULL,   -- global rank among all screen passers
+    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded','leader')),
+    sector           TEXT    NOT NULL DEFAULT 'Other',  -- canonical bucket
     exclusion_reason TEXT,
-    screen_reasons   TEXT    NOT NULL,   -- JSON {rule: "peg 0.82 <= 1.5", ...}
+    screen_reasons   TEXT    NOT NULL,   -- JSON {rule: "fwd P/E 20.4 ≤ 25", ...}
     screener_metrics TEXT    NOT NULL,   -- JSON raw screener row (labeled claims)
+    peer_context     TEXT,               -- JSON industry peers + median fwd P/E (claims)
     PRIMARY KEY (run_id, ticker),
     CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
 ) WITHOUT ROWID;

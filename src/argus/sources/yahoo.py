@@ -30,6 +30,11 @@ _NUM_FIELDS: tuple[tuple[str, Field, float], ...] = (
     ("operatingMargins", Field.OPERATING_MARGIN, 1.0),
     ("returnOnEquity", Field.ROE, 1.0),  # fraction, like the margins
     ("debtToEquity", Field.DEBT_TO_EQUITY, 100.0),
+    ("totalCash", Field.TOTAL_CASH, 1.0),
+    ("totalDebt", Field.TOTAL_DEBT, 1.0),
+    ("enterpriseToEbitda", Field.EV_EBITDA, 1.0),
+    ("dividendYield", Field.DIVIDEND_YIELD, 100.0),  # yfinance reports percent (verified live)
+    ("beta", Field.BETA, 1.0),
     ("targetMeanPrice", Field.ANALYST_TARGET_MEAN, 1.0),
     ("numberOfAnalystOpinions", Field.ANALYST_COUNT, 1.0),
 )
@@ -126,6 +131,24 @@ class YahooSource:
             raw = info.get(key)
             if raw is not None:
                 emit_num(field, raw, divisor)
+
+        # FCF margin is derived (freeCashflow / totalRevenue) — the same
+        # ratio-from-tags precedent as the EDGAR adapter. freeCashflow has no
+        # field of its own, so a present-but-garbled value must become a
+        # ParseFailure HERE (hard rule 2) — the revenue leg gets its failure
+        # via Field.REVENUE's normal path.
+        fcf_raw = info.get("freeCashflow")
+        revenue_raw = info.get("totalRevenue")
+        fcf_clean = isinstance(fcf_raw, (int, float)) and not isinstance(fcf_raw, bool)
+        if fcf_raw is not None and not fcf_clean:
+            failures.append(_failure(Field.FCF_MARGIN, fcf_raw, ticker, fetched_at))
+        elif (
+            fcf_clean
+            and isinstance(revenue_raw, (int, float))
+            and not isinstance(revenue_raw, bool)
+            and revenue_raw > 0
+        ):
+            emit_num(Field.FCF_MARGIN, fcf_raw / revenue_raw)
 
         rating = info.get("recommendationKey")
         if isinstance(rating, str) and rating:

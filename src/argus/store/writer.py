@@ -204,17 +204,19 @@ def write_scout_candidates(
         for record in records:
             con.execute(
                 """INSERT INTO scout_candidates
-                     (run_id, ticker, rank, status, exclusion_reason,
-                      screen_reasons, screener_metrics)
-                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                     (run_id, ticker, rank, status, sector, exclusion_reason,
+                      screen_reasons, screener_metrics, peer_context)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     record.ticker,
                     record.rank,
                     record.status,
+                    record.sector,
                     record.exclusion_reason,
                     json.dumps(record.screen_reasons),
                     json.dumps(record.screener_metrics),
+                    json.dumps(record.peer_context) if record.peer_context is not None else None,
                 ),
             )
 

@@ -367,16 +367,20 @@ class TickerReport(BaseModel):
 
 class ScoutCandidateRecord(BaseModel):
     """Write-side scout row: one screened candidate's fate this run.
-    Screener numbers ride along as labeled claims only."""
+    Screener numbers ride along as labeled claims only. A 'leader' is the
+    best passer of a sector with no shortlist representation — shown for
+    category coverage, never enriched, never proposed."""
 
     model_config = ConfigDict(frozen=True)
 
     ticker: str
-    rank: int
-    status: Literal["proposed", "excluded"]
+    rank: int  # global rank among all screen passers
+    status: Literal["proposed", "excluded", "leader"]
+    sector: str = "Other"  # canonical (scout.sectors)
     exclusion_reason: str | None = None
     screen_reasons: dict[str, str]
     screener_metrics: dict[str, float | str | None]
+    peer_context: dict | None = None  # {industry, n, median_fwd_pe, peers:[...]} — claims
 
     @model_validator(mode="after")
     def _reason_iff_excluded(self) -> "ScoutCandidateRecord":

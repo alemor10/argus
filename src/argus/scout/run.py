@@ -48,23 +48,45 @@ def run_scout(
     except ScreenerError as exc:
         return _outage_run(con, sink, as_of, app_version, str(exc))
 
-    candidates = screen(rows, criteria, exclude)
+    result = screen(rows, criteria, exclude)
     # Dedupe on the canonical symbol: two screener rows can collapse to one
     # house ticker (DUP.A/DUP-A, or a feed hiccup repeating a symbol), and a
     # duplicate would violate the store's per-run primary keys and kill the
     # run. screen() returns rank order, so first occurrence = best rank.
     unique: dict[str, ScreenedCandidate] = {}
-    for candidate in candidates:
+    for candidate in result.shortlist:
         unique.setdefault(house_symbol(candidate.row.ticker), candidate)
     candidates = list(unique.values())
+    # Leaders dedupe on the same canonical symbol — against the shortlist AND
+    # each other (a dot/dash duplicate can lead two different buckets, and a
+    # ticker collision in scout_candidates would kill the whole write).
+    leader_map: dict[str, ScreenedCandidate] = {}
+    for leader in result.sector_leaders:
+        symbol = house_symbol(leader.row.ticker)
+        if symbol not in unique:
+            leader_map.setdefault(symbol, leader)
+    leaders = list(leader_map.values())
+    peer_contexts = {
+        house_symbol(c.row.ticker): _peer_context(c.row, rows) for c in candidates
+    }
     contexts = [TickerContext(ticker=symbol) for symbol in unique]
 
     skipped = getattr(screener, "last_skipped", 0)
 
     def before_digest(con_: sqlite3.Connection, run_id: int) -> None:
-        writer.write_scout_candidates(
-            con_, run_id=run_id, records=_verdicts(con_, run_id, candidates, criteria)
-        )
+        records = _verdicts(con_, run_id, candidates, criteria, peer_contexts)
+        records += [
+            ScoutCandidateRecord(
+                ticker=house_symbol(leader.row.ticker),
+                rank=leader.rank,
+                status="leader",
+                sector=leader.sector,
+                screen_reasons=leader.reasons,
+                screener_metrics=leader.row.model_dump(),
+            )
+            for leader in leaders
+        ]
+        writer.write_scout_candidates(con_, run_id=run_id, records=records)
         if skipped:
             # The screener dropped rows it could not identify — countable
             # degradation belongs in the digest header, not a log nobody reads.
@@ -87,11 +109,45 @@ def run_scout(
     )
 
 
+def _peer_context(row, rows) -> dict | None:
+    """Industry peers + relative valuation from the SAME scan — context we
+    already paid for. Screener claims, labeled as such downstream."""
+    if not row.industry:
+        return None
+    own = house_symbol(row.ticker)
+    same = [
+        r
+        for r in rows
+        if r.industry == row.industry and house_symbol(r.ticker) != own
+    ]
+    if not same:
+        return None
+    fwd = sorted(r.fwd_pe for r in same + [row] if r.fwd_pe is not None and r.fwd_pe > 0)
+    median = None
+    if fwd:
+        middle = len(fwd) // 2
+        median = fwd[middle] if len(fwd) % 2 else (fwd[middle - 1] + fwd[middle]) / 2
+    top = sorted(same, key=lambda r: r.market_cap or 0, reverse=True)[:3]
+    return {
+        "industry": row.industry,
+        "n": len(same) + 1,
+        "median_fwd_pe": round(median, 1) if median is not None else None,
+        "peers": [
+            {
+                "ticker": house_symbol(peer.ticker),
+                "fwd_pe": round(peer.fwd_pe, 1) if peer.fwd_pe is not None else None,
+            }
+            for peer in top
+        ],
+    }
+
+
 def _verdicts(
     con: sqlite3.Connection,
     run_id: int,
     candidates: Sequence[ScreenedCandidate],
     criteria: ScoutCriteria,
+    peer_contexts: dict[str, dict | None],
 ) -> list[ScoutCandidateRecord]:
     """Post-enrichment eligibility, per ARCHITECTURE's core-fields rule
     (price, forward or trailing P/E, margins — missing OR quarantined
@@ -160,14 +216,46 @@ def _verdicts(
                     )
                 if claimed is not None:
                     reason += f" (screener claimed {claimed:.1f})"
+            elif (
+                (verified_roe := snapshot.values.get(Field.ROE)) is not None
+                and verified_roe.value * 100 < criteria.min_roe_pct
+            ):
+                # The SSRM case: passed on a claimed 17.3% ROE that verified
+                # at 12.4% — verified numbers decide for quality floors too.
+                status = "excluded"
+                reason = (
+                    f"verified ROE {verified_roe.value * 100:.1f}% is below the screen "
+                    f"floor {criteria.min_roe_pct:g}%"
+                )
+                claimed_roe = candidate.row.roe_pct
+                if claimed_roe is not None:
+                    reason += f" (screener claimed {claimed_roe:.1f}%)"
+            elif (
+                (verified_growth := snapshot.values.get(Field.REVENUE_GROWTH)) is not None
+                and verified_growth.value <= 0
+            ):
+                # Window honesty: our verified figure is MRQ YoY, the screen's
+                # floor is TTM — different windows, so only the DIRECTION is
+                # enforced. Shrinking latest-quarter revenue on a "growth"
+                # candidate is disqualifying whatever the TTM says.
+                status = "excluded"
+                reason = (
+                    f"verified revenue growth (MRQ YoY) "
+                    f"{verified_growth.value * 100:+.1f}% is not positive"
+                )
+                claimed_growth = candidate.row.revenue_growth_ttm_pct
+                if claimed_growth is not None:
+                    reason += f" (screener claimed {claimed_growth:+.1f}% TTM)"
         records.append(
             ScoutCandidateRecord(
                 ticker=ticker,
                 rank=candidate.rank,
                 status=status,
+                sector=candidate.sector,
                 exclusion_reason=reason,
                 screen_reasons=candidate.reasons,
                 screener_metrics=candidate.row.model_dump(),
+                peer_context=peer_contexts.get(ticker),
             )
         )
     return records

@@ -178,11 +178,13 @@ def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
 
 
 def _scout_proposals(con: sqlite3.Connection, run_id: int) -> tuple[ScoutProposal, ...]:
-    """Hydrate the run's scout rows, proposed first (by rank), then excluded."""
+    """Hydrate the run's scout rows: proposed first (by rank), then sector
+    leaders, then excluded."""
     rows = con.execute(
-        """SELECT ticker, rank, status, exclusion_reason, screen_reasons, screener_metrics
+        """SELECT ticker, rank, status, sector, exclusion_reason, screen_reasons,
+                  screener_metrics, peer_context
            FROM scout_candidates WHERE run_id = ?
-           ORDER BY CASE status WHEN 'proposed' THEN 0 ELSE 1 END, rank""",
+           ORDER BY CASE status WHEN 'proposed' THEN 0 WHEN 'leader' THEN 1 ELSE 2 END, rank""",
         (run_id,),
     ).fetchall()
     return tuple(
@@ -190,9 +192,11 @@ def _scout_proposals(con: sqlite3.Connection, run_id: int) -> tuple[ScoutProposa
             ticker=row["ticker"],
             rank=row["rank"],
             status=row["status"],
+            sector=row["sector"],
             exclusion_reason=row["exclusion_reason"],
             screen_reasons=json.loads(row["screen_reasons"]),
             screener_metrics=json.loads(row["screener_metrics"]),
+            peer_context=json.loads(row["peer_context"]) if row["peer_context"] else None,
             streak=scout_streak(con, row["ticker"], run_id) if row["status"] == "proposed" else 0,
         )
         for row in rows

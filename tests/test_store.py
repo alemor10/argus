@@ -59,6 +59,42 @@ def test_migrate_refuses_unknown_versions(tmp_path):
     con.close()
 
 
+def test_migrate_v2_rebuilds_scout_candidates_preserving_rows(tmp_path):
+    """v1.3's leader status + sector + peer_context require a table rebuild
+    (SQLite cannot alter a CHECK); existing rows must survive with defaults."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    con.executescript(
+        """
+        DROP TABLE scout_candidates;
+        CREATE TABLE scout_candidates (
+            run_id           INTEGER NOT NULL REFERENCES runs(run_id),
+            ticker           TEXT    NOT NULL,
+            rank             INTEGER NOT NULL,
+            status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded')),
+            exclusion_reason TEXT,
+            screen_reasons   TEXT    NOT NULL,
+            screener_metrics TEXT    NOT NULL,
+            PRIMARY KEY (run_id, ticker),
+            CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
+        ) WITHOUT ROWID;
+        INSERT INTO runs (kind, started_at, app_version)
+            VALUES ('scout', '2026-07-13T15:00:00+00:00', 't');
+        INSERT INTO scout_candidates VALUES (1, 'OLDCO', 1, 'proposed', NULL, '{}', '{}');
+        PRAGMA user_version = 2;
+        """
+    )
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    row = con.execute("SELECT * FROM scout_candidates").fetchone()
+    assert (row["ticker"], row["sector"], row["peer_context"]) == ("OLDCO", "Other", None)
+    con.execute(  # the rebuilt CHECK admits the new status
+        "INSERT INTO scout_candidates (run_id, ticker, rank, status, screen_reasons, screener_metrics) "
+        "VALUES (1, 'LEADCO', 2, 'leader', '{}', '{}')"
+    )
+    con.close()
+
+
 def test_migrate_upgrades_older_databases_stepwise(tmp_path):
     """A database born at schema version 1 (pre company_profiles) upgrades in
     place — the numbered-migration path the deployed box will rely on."""
