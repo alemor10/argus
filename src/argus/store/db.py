@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -56,6 +56,19 @@ ALTER TABLE scout_candidates_v3 RENAME TO scout_candidates;
     3: lambda con: _add_column_if_absent(
         con, "run_tickers", "thesis_checks", "TEXT NOT NULL DEFAULT '[]'"
     ),
+    # v1.5: the scout self-scoring forward log. New table, IF NOT EXISTS so a
+    # re-run or fresh-then-downgraded database is a no-op.
+    4: """
+CREATE TABLE IF NOT EXISTS scorecard_marks (
+    run_id            INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker            TEXT    NOT NULL,
+    first_proposed_at TEXT    NOT NULL,
+    weeks_out         INTEGER NOT NULL,
+    name_return       REAL    NOT NULL,
+    spy_return        REAL    NOT NULL,
+    PRIMARY KEY (run_id, ticker)
+) WITHOUT ROWID;
+""",
 }
 
 

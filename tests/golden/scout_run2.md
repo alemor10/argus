@@ -13,6 +13,16 @@ _'#' is the global screen rank; gaps are names excluded after enrichment or sect
 Screen (screener claims, verified independently above):
 - **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30% · vs industry median fwd P/E 15 (Widgets, n=3)
 
+## Scorecard — how past proposals have done vs SPY
+
+| First proposed | Names | Median return | SPY | Median α | Beat SPY |
+| --- | --- | --- | --- | --- | --- |
+| ≤ 1 week | 1 | +10.0% | +4.0% | +6.0% | 1/1 |
+
+**Overall:** 1 names ever proposed — median α +6.0%, 1/1 beat SPY.
+
+_Total return incl. dividends (adjusted close), every proposal counted from its first appearance (no survivorship), never revised. The market is the answer key — Argus never grades itself._
+
 ## Excluded after enrichment
 
 - DEADCO (screen rank 2): fetch failed: yahoo: HTTP 502 from upstream

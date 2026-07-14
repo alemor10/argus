@@ -443,6 +443,51 @@ class ScoutProposal(ScoutCandidateRecord):
     streak: int = 0
 
 
+class ScorecardMark(BaseModel):
+    """One name's realized standing as of a scoring run — total return since
+    scout first proposed it, vs SPY over the same window. Immutable once
+    written; the market is the answer key."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    first_proposed_at: date
+    weeks_out: int
+    name_return: float  # fraction
+    spy_return: float
+
+    @property
+    def alpha(self) -> float:
+        return self.name_return - self.spy_return
+
+
+class ScorecardCohort(BaseModel):
+    """Names grouped by how long ago scout first proposed them."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    n: int
+    median_return: float
+    median_spy: float
+    median_alpha: float
+    beat_spy: int  # count with alpha > 0
+
+
+class Scorecard(BaseModel):
+    """The scout self-scoring summary rendered in the digest — derived
+    deterministically from the run's persisted marks, so it reproduces."""
+
+    model_config = ConfigDict(frozen=True)
+
+    as_of: date
+    cohorts: tuple[ScorecardCohort, ...] = ()
+    overall_n: int = 0
+    overall_median_alpha: float = 0.0
+    overall_beat_spy: int = 0
+    unpriceable: int = 0  # proposed names whose history could not be fetched
+
+
 class RunReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -453,3 +498,4 @@ class RunReport(BaseModel):
     notes: str | None = None  # e.g. "screener unavailable: …" — rendered in the header
     tickers: tuple[TickerReport, ...] = ()
     scout: tuple[ScoutProposal, ...] = ()  # populated for kind='scout' only
+    scorecard: Scorecard | None = None  # scout self-scoring, when there is history

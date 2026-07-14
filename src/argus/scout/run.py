@@ -37,10 +37,17 @@ def run_scout(
     app_version: str,
     exclude: Set[str],
     artifact_builder: Callable[..., Sequence] | None = None,
+    price_fetcher: Callable[[str, date], Sequence[tuple[date, float]] | None] | None = None,
 ) -> engine.RunOutcome:
     """One scout run. `exclude` is the current watchlist (already-watched
     names are never proposed). Screener values only select candidates —
-    every reported number comes from the enrichment pipeline."""
+    every reported number comes from the enrichment pipeline. `price_fetcher`
+    supplies realized history for the self-scoring scorecard (defaults to the
+    live Yahoo fetch; injected in tests)."""
+    if price_fetcher is None:
+        from argus.sources.yahoo import fetch_price_series
+
+        price_fetcher = fetch_price_series
     try:
         rows = screener.scan(
             min_market_cap=criteria.min_market_cap, min_avg_volume=criteria.min_avg_volume
@@ -87,6 +94,7 @@ def run_scout(
             for leader in leaders
         ]
         writer.write_scout_candidates(con_, run_id=run_id, records=records)
+        _score_past_proposals(con_, run_id, today, price_fetcher)
         if skipped:
             # The screener dropped rows it could not identify — countable
             # degradation belongs in the digest header, not a log nobody reads.
@@ -107,6 +115,30 @@ def run_scout(
         before_digest=before_digest,
         artifact_builder=artifact_builder,
     )
+
+
+def _score_past_proposals(con: sqlite3.Connection, run_id: int, as_of: date, fetch) -> None:
+    """Grade the grader: score every name scout proposed on an EARLIER date
+    against SPY, and persist the marks (the immutable forward log). Prices are
+    ungated realized market data — a name that can't be priced is counted as
+    unpriceable, never a silent zero. Names first proposed today have no
+    elapsed time and are skipped until they mature."""
+    from argus import scorecard
+
+    # Eligible = names first proposed in an EARLIER run (run_id monotonic;
+    # matches the read-side eligibility so write and report agree).
+    proposals = [
+        (ticker, first)
+        for ticker, first, first_run in queries.first_proposals(con)
+        if first_run < run_id
+    ]
+    if not proposals:
+        return
+    earliest = min(first for _, first in proposals)
+    spy = fetch("SPY", earliest)
+    histories = {ticker: fetch(ticker, first) for ticker, first in proposals}
+    marks, _ = scorecard.compute_marks(proposals, histories, spy, as_of)
+    writer.write_scorecard_marks(con, run_id=run_id, marks=marks)
 
 
 def _peer_context(row, rows) -> dict | None:

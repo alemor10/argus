@@ -131,6 +131,21 @@ CREATE TABLE scout_candidates (
     CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
 ) WITHOUT ROWID;
 
+-- Scout self-scoring — an immutable forward log ("grade the grader"). On each
+-- scout run, every name scout has EVER proposed is scored: total return since
+-- it first surfaced vs SPY over the same window. Persisted per scoring run so
+-- the scorecard reproduces bit-for-bit and is never retroactively revised.
+-- The market is the answer key; the engine never grades itself.
+CREATE TABLE scorecard_marks (
+    run_id            INTEGER NOT NULL REFERENCES runs(run_id),  -- the SCORING run
+    ticker            TEXT    NOT NULL,
+    first_proposed_at TEXT    NOT NULL,   -- date scout first proposed this name
+    weeks_out         INTEGER NOT NULL,   -- whole weeks from first proposal to this run
+    name_return       REAL    NOT NULL,   -- fraction; total return incl. divs (adjusted close)
+    spy_return        REAL    NOT NULL,   -- SPY total return over the same window
+    PRIMARY KEY (run_id, ticker)
+) WITHOUT ROWID;
+
 -- Emitted events, persisted so `argus report --run N` regenerates any digest
 -- exactly and the digest never re-derives differently from what was reported.
 CREATE TABLE change_events (

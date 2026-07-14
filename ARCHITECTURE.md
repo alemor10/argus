@@ -661,6 +661,35 @@ Flow:
    "⚠ 1/4 BREACHED"). Held checks are silent — a holding thesis is the quiet
    good case.
 
+## Scout self-scoring — v1.5 ("grade the grader")
+
+A discovery engine you can't check is one you can't trust. Each scout run now
+scores how every name it has *ever* proposed has actually performed since it
+first surfaced, versus SPY over the same window — a realized-return forward
+log, never a prediction, with the market as the answer key (the engine never
+grades itself, per the same principle as the TTF calibration work).
+
+Honest by construction:
+- **No survivorship** — `queries.first_proposals` returns every name ever
+  proposed with the date it *first* surfaced; a name that later dropped off
+  the shortlist is still tracked from that first appearance.
+- **No silent zeros** — a name (or SPY) that can't be priced at both
+  endpoints is counted as `unpriceable` and excluded, never folded in as a
+  0% return. Prices are ungated realized market data (adjusted closes, so
+  total return includes dividends and splits on both legs) fetched via
+  `yahoo.fetch_price_series` — injected as `price_fetcher` so tests never
+  touch the network.
+- **Never revised** — `scorecard.compute_marks` runs in the scout
+  orchestration (`_score_past_proposals`, network-side) and the marks persist
+  immutably in `scorecard_marks` per scoring run (schema v5). Names first
+  proposed *today* have no elapsed time and are skipped until they mature.
+- **Reproducible** — `queries._scorecard` rebuilds the summary
+  (`scorecard.summarize`: age cohorts + overall median α + hit-rate)
+  deterministically from the persisted marks, so `argus report --run N`
+  reproduces the scorecard bit-for-bit. The digest renders it as a section;
+  the box's genuine forward log begins the first week a prior proposal has
+  had time to move.
+
 ## Post-v1 seams (built), and where extensions land
 
 - **thesis drift** → BUILT (v1.4, above): human-declared checkable conditions,

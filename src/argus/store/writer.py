@@ -27,6 +27,7 @@ from argus.models import (
     CompanyProfile,
     GatedObservation,
     ParseFailure,
+    ScorecardMark,
     ScoutCandidateRecord,
     SourceHealth,
     TickerContext,
@@ -219,6 +220,28 @@ def write_scout_candidates(
                     json.dumps(record.screen_reasons),
                     json.dumps(record.screener_metrics),
                     json.dumps(record.peer_context) if record.peer_context is not None else None,
+                ),
+            )
+
+
+def write_scorecard_marks(
+    con: sqlite3.Connection, *, run_id: int, marks: Sequence["ScorecardMark"]
+) -> None:
+    """Persist this scoring run's marks — the immutable forward log. One
+    transaction; INSERT OR IGNORE so a re-scored run is a no-op."""
+    with con:
+        for m in marks:
+            con.execute(
+                """INSERT OR IGNORE INTO scorecard_marks
+                     (run_id, ticker, first_proposed_at, weeks_out, name_return, spy_return)
+                   VALUES (?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    m.ticker,
+                    m.first_proposed_at.isoformat(),
+                    m.weeks_out,
+                    m.name_return,
+                    m.spy_return,
                 ),
             )
 

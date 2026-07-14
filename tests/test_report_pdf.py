@@ -23,6 +23,8 @@ from argus.models import (
     PriceMove,
     QuarantineHit,
     RunReport,
+    Scorecard,
+    ScorecardCohort,
     ScoutProposal,
     Snapshot,
     SourceHealth,
@@ -34,6 +36,8 @@ from argus.report_pdf import (
     _CRITICAL,
     _FISCAL_YEAR_CAPTION,
     _MUTED,
+    _SCORECARD_CAPTION,
+    _SCORECARD_EMPTY,
     _SECONDARY,
     _Cursor,
     _fmt_value,
@@ -42,6 +46,9 @@ from argus.report_pdf import (
     _leader_line,
     _peer_line,
     _revenue_chart,
+    _scorecard_empty_line,
+    _scorecard_overall_line,
+    _scorecard_rows,
     _sector_groups,
     _thesis_breaches,
     _thesis_header,
@@ -803,6 +810,107 @@ class TestDeterminism:
         pdf = build_pdf(_two_proposal_report(), {"AAA": _synthetic_history()})
         assert pdf.startswith(b"%PDF")
         assert _page_count(pdf) == 3
+
+
+# --- Scorecard (grade the grader — scout summary page only) ------------------
+
+
+def _scorecard(*, overall_alpha=0.034):
+    """A populated scout scorecard: two cohorts (one beating SPY, one lagging)
+    plus an overall roll-up whose median α the caller varies to exercise tone."""
+    return Scorecard(
+        as_of=date(2026, 7, 12),
+        cohorts=(
+            ScorecardCohort(
+                label="4-8 weeks ago", n=5, median_return=0.082,
+                median_spy=0.041, median_alpha=0.041, beat_spy=3,
+            ),
+            ScorecardCohort(
+                label="9-13 weeks ago", n=3, median_return=-0.015,
+                median_spy=0.022, median_alpha=-0.037, beat_spy=1,
+            ),
+        ),
+        overall_n=8,
+        overall_median_alpha=overall_alpha,
+        overall_beat_spy=4,
+        unpriceable=1,
+    )
+
+
+def _report_with_scorecard(card) -> RunReport:
+    return _two_proposal_report().model_copy(update={"scorecard": card})
+
+
+class TestScorecard:
+    def test_cohort_rows_are_signed_percents(self):
+        # Pure-helper seam: the compressed PDF text is asserted here, one row
+        # per cohort, every fraction rendered as a signed percent.
+        assert _scorecard_rows(_scorecard()) == [
+            ["4-8 weeks ago", "5", "+8.2%", "+4.1%", "+4.1%", "3/5"],
+            ["9-13 weeks ago", "3", "-1.5%", "+2.2%", "-3.7%", "1/3"],
+        ]
+
+    def test_overall_line_positive_alpha_wears_the_ok_tone(self):
+        text, tone = _scorecard_overall_line(_scorecard(overall_alpha=0.034))
+        assert text == "Overall: 8 names — median α +3.4%, 4/8 beat SPY."
+        assert tone == _SECONDARY
+
+    def test_overall_line_negative_alpha_wears_the_critical_tone(self):
+        text, tone = _scorecard_overall_line(_scorecard(overall_alpha=-0.021))
+        assert text == "Overall: 8 names — median α -2.1%, 4/8 beat SPY."
+        assert tone == _CRITICAL
+
+    def test_caption_mirrors_the_digest_story(self):
+        assert _SCORECARD_CAPTION == (
+            "Total return incl. dividends; every proposal counted from first "
+            "appearance, never revised — the market is the answer key."
+        )
+
+    def test_empty_line_when_run_carries_no_scorecard(self):
+        assert _scorecard_empty_line(None) == _SCORECARD_EMPTY
+        assert _SCORECARD_EMPTY == (
+            "No proposal has had time to play out yet — the forward log starts now."
+        )
+
+    def test_empty_line_distinguishes_unpriceable_from_nothing_matured(self):
+        # Review finding: an all-unpriceable run (fetch down) must NOT read as
+        # "nothing has matured" — absence of signal ≠ absence of data.
+        empty = Scorecard(as_of=date(2026, 7, 12), unpriceable=2)  # overall_n == 0
+        assert _scorecard_empty_line(empty) == (
+            "Price data was unavailable for all 2 eligible past proposal(s) this run "
+            "— scoring resumes when it returns."
+        )
+
+    def test_populated_scorecard_renders_and_is_byte_deterministic(self):
+        report = _report_with_scorecard(_scorecard())
+        history = {"AAA": _synthetic_history(), "BBB": None}
+        pdf = build_pdf(report, history)
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 3  # summary + two proposed detail pages
+        assert build_pdf(report, history) == build_pdf(report, history)
+
+    def test_none_scorecard_takes_the_forward_log_path(self):
+        # scorecard=None (the default) still renders the summary page, with the
+        # forward-log line standing in for the table.
+        report = _two_proposal_report()
+        assert report.scorecard is None
+        pdf = build_pdf(report, {})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 3
+
+    def test_overall_n_zero_scorecard_takes_the_forward_log_path(self):
+        report = _report_with_scorecard(Scorecard(as_of=date(2026, 7, 12), unpriceable=1))
+        pdf = build_pdf(report, {})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 3
+
+    def test_watch_pages_never_render_a_scorecard(self):
+        # Scout-only: a watch run with a scorecard attached ignores it and its
+        # page layout is unchanged (summary + NVDA + NTDOY + TCEHY).
+        report = _watch_report().model_copy(update={"scorecard": _scorecard()})
+        pdf = build_pdf(report, {"NVDA": _synthetic_history(base=150.0)})
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 4
 
 
 # --- Thesis checks (watch pages) --------------------------------------------

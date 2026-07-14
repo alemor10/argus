@@ -52,6 +52,12 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 
+### Scout self-scoring — SHIPPED v1.5 (2026-07-14, "grade the grader")
+- [x] Each scout run scores how its past proposals have done vs SPY — realized
+      returns, forward log, no survivorship, never revised, reproducible from
+      persisted marks. The market is the answer key; the engine never grades
+      itself. See ARCHITECTURE.md, Scout self-scoring.
+
 ### Discovery module — SHIPPED as scout v1.1 (2026-07-13, free-screener path)
 - [x] Universe screening: growth + valuation-adjusted-for-growth (PEG-style, never
       naive low-P/E), margin/balance-sheet health, value-trap exclusion,

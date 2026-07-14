@@ -6,6 +6,7 @@ here: why did the digest say that → the SQL that said it.
 
 import json
 import sqlite3
+from datetime import date as date_
 from datetime import datetime
 
 from argus.fields import Field
@@ -17,6 +18,8 @@ from argus.models import (
     QuarantinedObservation,
     QuarantineHit,
     RunReport,
+    Scorecard,
+    ScorecardMark,
     ScoutProposal,
     Snapshot,
     SourceHealth,
@@ -152,6 +155,60 @@ def company_profile(con: sqlite3.Connection, ticker: str) -> CompanyProfile | No
     return CompanyProfile.model_validate(dict(row)) if row is not None else None
 
 
+def first_proposals(con: sqlite3.Connection) -> list[tuple[str, date_, int]]:
+    """Every name scout has EVER proposed, with the date AND run_id it FIRST
+    surfaced — the scorecard's universe (no survivorship; a dropped name
+    stays tracked from its first proposal). Eligibility keys on the run_id
+    (monotonic) rather than the date, so a clock step-back can never
+    retroactively change an older run's scorecard."""
+    rows = con.execute(
+        """SELECT ticker, first_run,
+                  (SELECT started_at FROM runs WHERE run_id = first_run) AS first_at
+           FROM (
+             SELECT sc.ticker AS ticker, MIN(sc.run_id) AS first_run
+             FROM scout_candidates sc JOIN runs r ON r.run_id = sc.run_id
+             WHERE sc.status = 'proposed' AND r.kind = 'scout'
+             GROUP BY sc.ticker
+           )
+           ORDER BY ticker""",
+    ).fetchall()
+    return [
+        (row["ticker"], datetime.fromisoformat(row["first_at"]).date(), row["first_run"])
+        for row in rows
+    ]
+
+
+def _scorecard(con: sqlite3.Connection, run_id: int, run_started: datetime) -> Scorecard | None:
+    """Build the scorecard summary from THIS run's persisted marks —
+    deterministic, so `argus report --run N` reproduces it. `unpriceable` is
+    the eligible-but-not-marked count, so an all-unpriceable run (SPY fetch
+    down, delistings) reports the gap loudly rather than reading as 'nothing
+    has matured'. Returns None only when nothing was eligible yet."""
+    from argus import scorecard as scorecard_mod
+
+    # Eligible = names first proposed in an EARLIER run (run_id monotonic).
+    eligible = [ticker for ticker, _d, first_run in first_proposals(con) if first_run < run_id]
+    rows = con.execute(
+        """SELECT ticker, first_proposed_at, weeks_out, name_return, spy_return
+           FROM scorecard_marks WHERE run_id = ?""",
+        (run_id,),
+    ).fetchall()
+    if not eligible and not rows:
+        return None
+    marks = [
+        ScorecardMark(
+            ticker=row["ticker"],
+            first_proposed_at=date_.fromisoformat(row["first_proposed_at"]),
+            weeks_out=row["weeks_out"],
+            name_return=row["name_return"],
+            spy_return=row["spy_return"],
+        )
+        for row in rows
+    ]
+    unpriceable = max(len(eligible) - len(marks), 0)
+    return scorecard_mod.summarize(marks, run_started.date(), unpriceable)
+
+
 def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
     """Consecutive scout runs, up to and including run_id, in which this
     ticker was PROPOSED. A scout run where it was absent or excluded breaks
@@ -235,6 +292,11 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
         notes=run["notes"],
         tickers=tickers,
         scout=_scout_proposals(con, run_id) if run["kind"] == "scout" else (),
+        scorecard=(
+            _scorecard(con, run_id, datetime.fromisoformat(run["started_at"]))
+            if run["kind"] == "scout"
+            else None
+        ),
     )
 
 

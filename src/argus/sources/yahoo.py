@@ -403,12 +403,31 @@ def fetch_history(ticker: str, period: str = "1y") -> list[tuple[date, float]] |
         import yfinance as yf
 
         frame = yf.Ticker(ticker).history(period=period, auto_adjust=True)
-        closes = frame["Close"]
-        points = [
-            (index.date(), float(value))
-            for index, value in closes.items()
-            if value == value  # NaN guard
-        ]
-        return points or None
+        return _closes(frame)
     except Exception:
         return None
+
+
+def fetch_price_series(ticker: str, start: date) -> list[tuple[date, float]] | None:
+    """Adjusted daily closes from `start` to now — the scout scorecard's price
+    input. UNGATED (realized market data, never stored as observations);
+    adjusted so total return includes dividends and splits on both endpoints.
+    None on any failure — a name that can't be priced is counted as
+    unpriceable, never folded into the aggregate as a zero."""
+    try:
+        import yfinance as yf
+
+        frame = yf.Ticker(ticker).history(start=start.isoformat(), auto_adjust=True)
+        return _closes(frame)
+    except Exception:
+        return None
+
+
+def _closes(frame: Any) -> list[tuple[date, float]] | None:
+    closes = frame["Close"]
+    points = [
+        (index.date(), float(value))
+        for index, value in closes.items()
+        if value == value  # NaN guard
+    ]
+    return points or None

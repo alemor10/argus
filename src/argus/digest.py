@@ -84,6 +84,7 @@ def render(report: RunReport) -> str:
         sections = (
             _header(report),
             _proposals_section(report),
+            _scorecard_section(report),
             _scout_exclusions_section(report),
             _quarantine_section(tickers),
             _health_section(tickers),
@@ -222,6 +223,50 @@ def _finite_number(value: object) -> bool:
         and not isinstance(value, bool)
         and math.isfinite(value)
     )
+
+
+def _scorecard_section(report: RunReport) -> list[str]:
+    """Grade the grader: how scout's past proposals have actually done vs SPY.
+    Realized data, forward log — the market is the answer key, never the
+    engine. Empty until proposals have had time to play out."""
+    card = report.scorecard
+    lines = ["## Scorecard — how past proposals have done vs SPY", ""]
+    if card is None or card.overall_n == 0:
+        # Absence of signal must be distinguishable from absence of data: a
+        # card with unpriceable>0 means eligible names existed but could not
+        # be priced this run (fetch down / delisted), NOT "nothing has matured".
+        if card and card.unpriceable:
+            lines.append(
+                f"Price data was unavailable for all {card.unpriceable} eligible past "
+                "proposal(s) this run — scoring resumes when it returns."
+            )
+        else:
+            lines.append("No proposal has had time to play out yet — the forward log starts now.")
+        return lines
+    lines += [
+        "| First proposed | Names | Median return | SPY | Median α | Beat SPY |",
+        "| --- | --- | --- | --- | --- | --- |",
+    ]
+    for c in card.cohorts:
+        lines.append(
+            f"| {c.label} | {c.n} | {_pct(c.median_return)} | {_pct(c.median_spy)} "
+            f"| {_pct(c.median_alpha)} | {c.beat_spy}/{c.n} |"
+        )
+    lines += [
+        "",
+        f"**Overall:** {card.overall_n} names ever proposed — median α "
+        f"{_pct(card.overall_median_alpha)}, {card.overall_beat_spy}/{card.overall_n} beat SPY."
+        + (f" ({card.unpriceable} unpriceable, excluded)" if card.unpriceable else ""),
+        "",
+        "_Total return incl. dividends (adjusted close), every proposal counted "
+        "from its first appearance (no survivorship), never revised. The market "
+        "is the answer key — Argus never grades itself._",
+    ]
+    return lines
+
+
+def _pct(fraction: float) -> str:
+    return f"{fraction * 100:+.1f}%"
 
 
 def _scout_exclusions_section(report: RunReport) -> list[str]:

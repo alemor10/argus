@@ -118,7 +118,24 @@ def con(tmp_path):
     con.close()
 
 
-def _scout(con, sink, as_of, rows=ROWS, error=None):
+def _no_prices(ticker, start):
+    """Default scorecard fetcher for scout tests: no history → nothing scored
+    (the scorecard section renders its 'forward log starts now' line)."""
+    return None
+
+
+def _synthetic_prices(ticker, start):
+    """Deterministic rising series so the golden scorecard populates: a name
+    up ~10% from `start`, SPY up ~4%, no network."""
+    from datetime import timedelta
+
+    slope = 0.04 if ticker == "SPY" else 0.10
+    days = [start + timedelta(days=i) for i in range(0, 40, 7)]
+    base = 100.0
+    return [(d, base * (1 + slope * i / (len(days) - 1))) for i, d in enumerate(days)]
+
+
+def _scout(con, sink, as_of, rows=ROWS, error=None, price_fetcher=_no_prices):
     return run_scout(
         con=con,
         screener=_StubScreener(rows=rows, error=error),
@@ -130,6 +147,7 @@ def _scout(con, sink, as_of, rows=ROWS, error=None):
         today=as_of.date(),
         app_version="scout-test",
         exclude=set(),
+        price_fetcher=price_fetcher,
     )
 
 
@@ -176,6 +194,7 @@ class TestScoutRun:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         return con.execute(
             "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
@@ -258,6 +277,7 @@ class TestScoutRun:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         row = con.execute(
             "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
@@ -296,6 +316,7 @@ class TestScoutRun:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         row = con.execute(
             "SELECT status, exclusion_reason FROM scout_candidates WHERE run_id = ?",
@@ -324,6 +345,7 @@ class TestScoutRun:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         rows_db = con.execute(
             "SELECT ticker, status, sector FROM scout_candidates WHERE run_id = ? ORDER BY status",
@@ -339,6 +361,17 @@ class TestScoutRun:
         digest = sink.digests[outcome.run_id]
         assert "Sector leaders beyond the shortlist" in digest
         assert "FINCO" in digest
+
+    def test_all_unpriceable_scorecard_is_disclosed_not_hidden(self, con):
+        """Review finding: a scoring run where eligible past proposals exist
+        but none can be priced (fetch down) must SAY so, not read as 'nothing
+        has matured'."""
+        sink = _CaptureSink()
+        _scout(con, sink, RUN1_AT)  # CLEANCO proposed run 1
+        outcome = _scout(con, sink, RUN2_AT, price_fetcher=_no_prices)  # fetch down run 2
+        digest = sink.digests[outcome.run_id]
+        assert "Price data was unavailable" in digest
+        assert "the forward log starts now" not in digest
 
     def test_peer_context_round_trips(self, con):
         """Same-industry peers + median from the SAME scan land on the
@@ -360,6 +393,7 @@ class TestScoutRun:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         report = queries.run_report(con, outcome.run_id)
         clean = next(p for p in report.scout if p.ticker == "CLEANCO")
@@ -432,6 +466,7 @@ class TestScoutRun:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         digest = sink.digests[outcome.run_id]
         assert "No candidates passed" in digest
@@ -452,11 +487,12 @@ class TestScoutRun:
 
     def test_golden_scout_digest(self, con, update_golden):
         sink = _CaptureSink()
-        _scout(con, sink, RUN1_AT)
-        outcome = _scout(con, sink, RUN2_AT)
+        _scout(con, sink, RUN1_AT, price_fetcher=_synthetic_prices)
+        outcome = _scout(con, sink, RUN2_AT, price_fetcher=_synthetic_prices)
         digest = sink.digests[outcome.run_id]
         assert "CLEANCO" in digest and "2w" in digest  # streak visible
         assert "promote" in digest  # the human-decides hint
+        assert "Scorecard" in digest  # CLEANCO (proposed run 1) scored on run 2
         if update_golden:
             GOLDEN.write_text(digest, encoding="utf-8")
             pytest.skip("golden regenerated")
@@ -522,6 +558,7 @@ class TestCompanyProfiles:
             today=RUN1_AT.date(),
             app_version="scout-test",
             exclude=set(),
+            price_fetcher=_no_prices,
         )
         stored = queries.company_profile(con, "CLEANCO")
         assert stored is not None and stored.sector == "Technology"

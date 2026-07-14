@@ -4,8 +4,10 @@ The PDF is the digest's visual companion. Page 1 summarizes the run with the
 same tri-state honesty as the markdown — a value the gates did not accept is
 '—', never a blank and never a guess. For scout runs the proposals table is
 grouped by canonical sector, followed by the sector-leaders strip (screener
-claims, never enriched, no detail pages), the exclusions, and a Data health
-block mirroring the markdown's — the summary is the whole run on one page.
+claims, never enriched, no detail pages), the exclusions, the Scorecard grading
+past proposals vs SPY (the market is the answer key, mirroring the markdown's),
+and a Data health block mirroring the markdown's — the summary is the whole run
+on one page.
 Then one page per proposed scout candidate (or per watched ticker) opens
 with what the business IS (the CompanyProfile, rendered verbatim), states —
 for scout pages — why the screen surfaced the name (a purely factual
@@ -49,6 +51,7 @@ from argus.fields import SPECS, Field, Source
 from argus.models import (
     CompanyProfile,
     RunReport,
+    Scorecard,
     ScoutProposal,
     Snapshot,
     ThesisCheckResult,
@@ -93,6 +96,14 @@ _FISCAL_YEAR_CAPTION = "fiscal years — TTM revenue in the panel may differ"
 # The fixed hand-off line on every scout detail page: Argus surfaces facts,
 # the human writes the thesis (hard constraint — no self-generated theses).
 _PROMOTE_LINE = 'Argus proposes; the thesis is yours — argus promote {ticker} --thesis "..."'
+
+# Scorecard wording — mirrors the markdown digest's _scorecard_section so the
+# two artifacts never tell different stories about how past proposals have done.
+_SCORECARD_EMPTY = "No proposal has had time to play out yet — the forward log starts now."
+_SCORECARD_CAPTION = (
+    "Total return incl. dividends; every proposal counted from first appearance, "
+    "never revised — the market is the answer key."
+)
 
 # Human-facing field names — mirrors the markdown digest's labels exactly
 # (the two artifacts must never name the same field differently). A Field
@@ -372,6 +383,8 @@ def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
             size=8, color=_MUTED, style="italic", width=120,
         )
 
+    _scout_scorecard(fig, cur, report)
+
     cur.gap(0.016)
     cur.line("Data health", size=11, weight="bold")
     cur.gap(0.008)
@@ -400,6 +413,81 @@ def _leader_line(p: ScoutProposal) -> str:
     else:
         detail = f"#{p.rank} overall"
     return f"{p.sector} — {p.ticker} ({detail})"
+
+
+def _scout_scorecard(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+    """Grade the grader: how scout's past proposals have actually done vs SPY.
+    Realized data, forward log — the market is the answer key, never the engine,
+    and this block mirrors the digest's Scorecard so the two artifacts tell one
+    story. Empty (just the forward-log line) until proposals have had time to
+    play out; otherwise a cohort table plus an overall roll-up whose tone flags
+    good vs bad the same way the rest of the PDF does."""
+    card = report.scorecard
+    cur.gap(0.016)
+    cur.line("Scorecard — past proposals vs SPY", size=11, weight="bold")
+    cur.gap(0.008)
+    if card is None or card.overall_n == 0:
+        cur.wrapped(
+            _scorecard_empty_line(card), size=8.5, color=_SECONDARY, width=118, max_lines=2
+        )
+        return
+    columns = ["First proposed", "Names", "Median return", "SPY", "Median α", "Beat SPY"]
+    widths = [0.24, 0.12, 0.20, 0.13, 0.17, 0.14]
+    _table(fig, cur, columns, _scorecard_rows(card), widths)
+    cur.gap(0.004)
+    text, tone = _scorecard_overall_line(card)
+    cur.line(text, size=9, weight="bold", color=tone)
+    cur.gap(0.002)
+    cur.wrapped(_SCORECARD_CAPTION, size=8, color=_MUTED, style="italic", width=120, max_lines=2)
+
+
+def _scorecard_rows(card: Scorecard) -> list[list[str]]:
+    """One row per cohort — signed percents throughout (+3.4% / -1.2%), the
+    same columns and ordering as the digest's Scorecard table."""
+    return [
+        [
+            _clip(c.label, 30),
+            str(c.n),
+            _pct(c.median_return),
+            _pct(c.median_spy),
+            _pct(c.median_alpha),
+            f"{c.beat_spy}/{c.n}",
+        ]
+        for c in card.cohorts
+    ]
+
+
+def _scorecard_overall_line(card: Scorecard) -> tuple[str, str]:
+    """The overall roll-up line and its tone: a non-negative median α wears the
+    quiet ok tone (_SECONDARY), a negative one the critical tone (_CRITICAL) —
+    the same good/bad coloring the thesis panel uses, so the reader reads the
+    grade at a glance."""
+    n = card.overall_n
+    text = (
+        f"Overall: {n} name{'s' if n != 1 else ''} — "
+        f"median α {_pct(card.overall_median_alpha)}, "
+        f"{card.overall_beat_spy}/{n} beat SPY."
+    )
+    tone = _SECONDARY if card.overall_median_alpha >= 0 else _CRITICAL
+    return text, tone
+
+
+def _scorecard_empty_line(card: Scorecard | None) -> str:
+    """The empty-state line, distinguishing absence of signal from absence of
+    data (mirrors the digest): eligible-but-unpriceable names mean the price
+    fetch was down this run, NOT that nothing has matured."""
+    if card and card.unpriceable:
+        return (
+            f"Price data was unavailable for all {card.unpriceable} eligible past "
+            "proposal(s) this run — scoring resumes when it returns."
+        )
+    return _SCORECARD_EMPTY
+
+
+def _pct(fraction: float) -> str:
+    """Signed percent for scorecard values (+3.4% / -1.2%) — the digest's
+    Scorecard convention, so claim and verified value read identically."""
+    return f"{fraction * 100:+.1f}%"
 
 
 def _health_lines(report: RunReport) -> list[tuple[str, str]]:
