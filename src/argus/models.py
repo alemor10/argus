@@ -702,6 +702,51 @@ class Scorecard(BaseModel):
     unpriceable: int = 0  # proposed names whose history could not be fetched
 
 
+class RecapEvent(BaseModel):
+    """One event of the week, stamped with the day it fired."""
+
+    model_config = ConfigDict(frozen=True)
+
+    day: date
+    ticker: str
+    event: ChangeEvent
+
+
+class RecapMacroLine(BaseModel):
+    """One macro series, week over week — current level vs the last accepted
+    value before the window opened."""
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str
+    unit: str = ""
+    decimals: int = 2
+    current: float
+    week_ago: float | None = None
+    delta: float | None = None
+
+
+class RecapReport(BaseModel):
+    """The Sunday Edition's input — aggregated entirely from the store
+    (append-only pays off: the week is already persisted), except the
+    week-ahead calendar, which is fetched at print time and labeled so."""
+
+    model_config = ConfigDict(frozen=True)
+
+    week_ending: date
+    watch_runs: int = 0
+    events: tuple[RecapEvent, ...] = ()
+    standing_suppressed: int = 0  # re-fired standing states rolled up, not listed
+    macro: tuple[RecapMacroLine, ...] = ()
+    scout_run_id: int | None = None  # the week's scout run (delivery naming rides it)
+    proposals: tuple[ScoutProposal, ...] = ()
+    entered: tuple[str, ...] = ()  # shortlist churn vs the prior scout run
+    dropped: tuple[str, ...] = ()
+    scorecard: Scorecard | None = None
+    week_ahead: tuple[BellwetherEarning, ...] = ()  # pinned names only (print-time claims)
+    week_ahead_note: str | None = None
+
+
 class RunReport(BaseModel):
     model_config = ConfigDict(frozen=True)
 

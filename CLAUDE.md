@@ -77,6 +77,12 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       extremes; mechanical curation, claims-labeled). Tue–Sat issues post
       always; Monday is a quiet events-only pulse; crypto/commodities joined
       the macro strip. See ARCHITECTURE.md, The market wire.
+- [x] The Sunday Edition (v1.10, 2026-07-16): `argus recap` — the week in one
+      PDF, aggregated purely from the store (day-stamped events with standing
+      reminders rolled up, macro week-over-week, shortlist churn, scorecard,
+      week-ahead pins). Sunday posts ONE message: the Edition + the morning's
+      scout PDF (scout runs `--deliver never`). See ARCHITECTURE.md, The
+      Sunday Edition.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

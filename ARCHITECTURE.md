@@ -805,6 +805,26 @@ reproduces the issue. Cadence: Tue–Sat issues post always (each covers a
 real trading day); Monday is a quiet events-only pulse (its market data
 would reprint Saturday's); Sunday carries scout + the weekly recap.
 
+## The Sunday Edition — v1.10 (weekly recap)
+
+`argus recap` is the week in one PDF, aggregated ENTIRELY from the store —
+the append-only design's payoff: events, observations, and shortlist
+verdicts are already persisted, so the recap re-fetches nothing. Sections:
+the week's events day-stamped (re-fired standing states — still-breached
+lines, in-window reminders — roll up into one suppressed count instead of
+repeating five mornings), macro week-over-week (current level vs the last
+accepted value BEFORE the window opened — where slow drift invisible to
+daily Δs surfaces), discovery (the week's shortlist, churn vs the prior
+scout run, the scorecard), and the week ahead (pinned bellwethers reporting
+next week — the ONE print-time fetch, labeled and not archived; the
+disclosed exception to store-only reproducibility).
+`argus recap --week-ending D` regenerates any past week.
+
+Sunday cadence: scout runs 09:00 with `--deliver never` (file record only —
+DeliverPolicy.NEVER exists for exactly this), then the Edition posts at
+09:45 as ONE message carrying two PDFs: the recap and the morning's full
+scout report. Delivery failures exit 1 (undelivered = unseen).
+
 ## Scout self-scoring — v1.5 ("grade the grader")
 
 A discovery engine you can't check is one you can't trust. Each scout run now

@@ -205,10 +205,13 @@ top_n: 15                     # shortlist size sent through enrichment + gates
 
 class DeliverPolicy(str, Enum):
     """When the delivery channels (Discord/email) fire. The file sink always
-    writes — the disk copy is the record; the channels are the pager."""
+    writes — the disk copy is the record; the channels are the pager.
+    NEVER = file record only (the Sunday scout runs quietly at 09:00; the
+    Sunday Edition delivers both PDFs in one post right after)."""
 
     ALWAYS = "always"
     EVENTS_ONLY = "events-only"
+    NEVER = "never"
 
 
 def _build_sinks(paths: Paths) -> tuple[DigestSink, list[DigestSink]]:
@@ -245,7 +248,10 @@ def _compose_sinks(
 ) -> tuple[DigestSink, DigestSink | None]:
     """(always-sink, gated-sink-or-None) for engine.run. Under ALWAYS the
     channels ride with the file sink exactly as before; under EVENTS_ONLY
-    they only fire when the run carries new information."""
+    they only fire when the run carries new information; under NEVER only
+    the file record is written."""
+    if deliver is DeliverPolicy.NEVER:
+        return file_sink, None
     if deliver is DeliverPolicy.EVENTS_ONLY and channels:
         gated = channels[0] if len(channels) == 1 else CompositeSink(*channels)
         return file_sink, gated
@@ -491,7 +497,17 @@ def init(root: RootOpt = None) -> None:
 
 
 @app.command()
-def scout(root: RootOpt = None) -> None:
+def scout(
+    root: RootOpt = None,
+    deliver: Annotated[
+        DeliverPolicy,
+        typer.Option(
+            "--deliver",
+            help="'always' posts the scout report; 'never' writes the file record only "
+            "(the Sunday Edition delivers it minutes later in one post).",
+        ),
+    ] = DeliverPolicy.ALWAYS,
+) -> None:
     """Screen the universe for new candidates and propose a shortlist.
 
     Proposes only: nothing is ever added to the watchlist — promote a
@@ -517,7 +533,7 @@ def scout(root: RootOpt = None) -> None:
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    sink, _ = _compose_sinks(file_sink, channels, DeliverPolicy.ALWAYS)
+    sink, _ = _compose_sinks(file_sink, channels, deliver)
     as_of = datetime.now(UTC)
     con = connect(paths.db)
     try:
@@ -539,6 +555,96 @@ def scout(root: RootOpt = None) -> None:
         con.close()
     typer.echo(f"Scout run {outcome.run_id}: {outcome.status}")
     _exit_for(outcome)
+
+
+@app.command()
+def recap(
+    root: RootOpt = None,
+    week_ending: Annotated[
+        Optional[str],
+        typer.Option(
+            "--week-ending",
+            help="ISO date the week ends on (inclusive); default today. Regenerates "
+            "any past week from the store (only the week-ahead section is print-time).",
+        ),
+    ] = None,
+) -> None:
+    """The Sunday Edition: the week in one PDF — events, macro week-over-week,
+    shortlist churn, scorecard, and the week ahead — read from the store and
+    delivered with the morning's scout report attached."""
+    from datetime import date as date_, timedelta
+
+    from argus.digest import Attachment
+    from argus.recap import build_recap, build_recap_pdf, render_recap
+
+    paths = resolve_paths(root)
+    if not paths.db.exists():
+        typer.echo(f"No database at {paths.db} — nothing to recap.", err=True)
+        raise typer.Exit(1)
+    ending = date_.fromisoformat(week_ending) if week_ending else date_.today()
+    macro_config = load_macro_config(paths.macro)
+
+    # The one print-time fetch: next week's pinned reporters (labeled, not archived).
+    week_ahead: list = []
+    note: str | None = None
+    api_key = resolve_secrets().finnhub_api_key
+    pins = {s.strip().upper() for s in macro_config.bellwethers}
+    if api_key and pins:
+        try:
+            calendar = FinnhubSource(api_key).earnings_calendar(
+                frm=ending, to=ending + timedelta(days=7)
+            )
+            week_ahead = [r for r in calendar if r.symbol.upper() in pins]
+            others = len(calendar) - len(week_ahead)
+            note = f"{others} more companies report next week (unfiltered count)."
+        except Exception as exc:  # the edition must land; the calendar is context
+            note = f"week-ahead calendar unavailable: {exc}"
+    else:
+        note = "week-ahead calendar not configured (FINNHUB_API_KEY / bellwethers)."
+
+    con = connect(paths.db)
+    try:
+        migrate(con)
+        report = build_recap(con, week_ending=ending, week_ahead=week_ahead, week_ahead_note=note)
+    finally:
+        con.close()
+    markdown = render_recap(report)
+    pdf = build_recap_pdf(report)
+
+    paths.reports.mkdir(parents=True, exist_ok=True)
+    md_path = paths.reports / f"sunday-edition-{ending.isoformat()}.md"
+    md_path.write_text(markdown, encoding="utf-8")
+    pdf_name = f"argus-sunday-edition-{ending.isoformat()}.pdf"
+    (paths.reports / pdf_name).write_bytes(pdf)
+
+    attachments = [Attachment(pdf_name, pdf, "application/pdf")]
+    if report.scout_run_id is not None:
+        # One Sunday post: the edition + the morning's full scout report.
+        scout_pdf = paths.reports / f"argus-scout-{ending.isoformat()}-run{report.scout_run_id}.pdf"
+        if scout_pdf.exists():
+            attachments.append(
+                Attachment(scout_pdf.name, scout_pdf.read_bytes(), "application/pdf")
+            )
+    try:
+        _file_sink, channels = _build_sinks(paths)
+    except ValueError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    failures = []
+    for channel in channels:
+        try:
+            channel.write(
+                markdown,
+                run_id=report.scout_run_id or 0,
+                as_of=ending,
+                attachments=tuple(attachments),
+            )
+        except Exception as exc:  # undelivered = unseen on a headless box
+            failures.append(f"{type(channel).__name__}: {exc}")
+    typer.echo(f"Sunday Edition: {md_path}")
+    if failures:
+        typer.echo("Edition written but NOT delivered: " + "; ".join(failures), err=True)
+        raise typer.Exit(1)
 
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")
