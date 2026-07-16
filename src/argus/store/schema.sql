@@ -27,6 +27,9 @@ CREATE TABLE run_tickers (
     thesis        TEXT,
     thresholds    TEXT    NOT NULL,   -- Thresholds.model_dump_json() at run time
     thesis_checks TEXT    NOT NULL DEFAULT '[]',  -- JSON [ThesisCheck, ...] at run time
+    macro         TEXT,               -- MacroSpec JSON at run time; NULL = watch role.
+                                      -- The whole spec is snapshotted so report --run N
+                                      -- reproduces the Macro section after macro.yaml edits.
     PRIMARY KEY (run_id, ticker)
 ) WITHOUT ROWID;
 
@@ -146,6 +149,23 @@ CREATE TABLE scout_candidates (
     peer_context     TEXT,               -- JSON industry peers + median fwd P/E (claims)
     PRIMARY KEY (run_id, ticker),
     CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
+) WITHOUT ROWID;
+
+-- Bellwether earnings context per run: the megacap calendar window fetched
+-- from Finnhub, filtered to macro.yaml's bellwethers list. CLAIMS-labeled
+-- display data (single unofficial source, never gated) — persisted per run
+-- only so report --run N reproduces the section; never in observations or
+-- earnings_results.
+CREATE TABLE bellwether_earnings (
+    run_id           INTEGER NOT NULL REFERENCES runs(run_id),
+    symbol           TEXT    NOT NULL,
+    report_date      TEXT    NOT NULL,   -- ISO date
+    hour             TEXT,               -- bmo | amc | '' as reported
+    eps_estimate     REAL,
+    eps_actual       REAL,
+    revenue_estimate REAL,
+    revenue_actual   REAL,
+    PRIMARY KEY (run_id, symbol, report_date)
 ) WITHOUT ROWID;
 
 -- Scout self-scoring — an immutable forward log ("grade the grader"). On each

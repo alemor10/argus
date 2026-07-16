@@ -15,6 +15,7 @@ class Source(StrEnum):
     YAHOO = "yahoo"
     EDGAR = "edgar"
     FINNHUB = "finnhub"
+    FRED = "fred"  # macro economic series (keyless fredgraph.csv; keyed API is the upgrade)
 
 
 class Field(StrEnum):
@@ -39,6 +40,7 @@ class Field(StrEnum):
     ANALYST_RATING = "analyst_rating"
     ANALYST_TARGET_MEAN = "analyst_target_mean"
     ANALYST_COUNT = "analyst_count"
+    ECON_VALUE = "econ_value"  # macro economic series (FRED) — one number per series
 
 
 class QuarantineCode(StrEnum):
@@ -125,4 +127,15 @@ SPECS: dict[Field, FieldSpec] = {
     Field.ANALYST_RATING: FieldSpec("text"),
     Field.ANALYST_TARGET_MEAN: FieldSpec("num", bounds=(0.0001, 10_000_000)),
     Field.ANALYST_COUNT: FieldSpec("num", bounds=(1, 10_000)),
+    Field.ECON_VALUE: FieldSpec(
+        "num",
+        # A macro print can be a yield (4.5), a payroll change in thousands
+        # (±20,500 observed in 2020), or an index level — only the absurd is
+        # out of bounds. No max_age: a monthly print is weeks old by nature
+        # (observed_at = period date); tighten empirically later, per the
+        # house rule. Per-series `sanity` bands in macro.yaml are the tight
+        # rail, applied at render as a human-drawn line, never a gate.
+        bounds=(-1e7, 1e7),
+        priority=(Source.FRED,),
+    ),
 }

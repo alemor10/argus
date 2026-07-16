@@ -12,6 +12,10 @@ from argus.models import (
     EarningsReported,
     FieldQuarantined,
     FieldValue,
+    MacroLineCrossed,
+    MacroPrint,
+    MacroShift,
+    MacroSpec,
     PriceMove,
     QuarantineHit,
     QuarantinedObservation,
@@ -21,6 +25,7 @@ from argus.models import (
     TickerContext,
     TickerReport,
 )
+from argus.thesis import parse_thesis_check
 
 NOW = datetime(2026, 7, 12, 14, 3, tzinfo=UTC)
 BASELINE_AT = datetime(2026, 6, 28, 13, 0, tzinfo=UTC)
@@ -200,6 +205,196 @@ class TestChangesSection:
         out = render(_report([_quiet_ticker(baseline_run_id=None, baseline_as_of=None)]))
         assert "Baseline established this run" in out
         assert "NVDA" in out
+
+
+def _macro_ticker(
+    symbol,
+    label,
+    *,
+    value=None,
+    baseline_value=None,
+    spec=None,
+    quarantined=None,
+    events=(),
+    source=Source.YAHOO,
+    observed_at=None,
+):
+    spec = spec or MacroSpec(label=label, source=source)
+    field = spec.value_field
+    values = {}
+    if value is not None:
+        values[field] = FieldValue(
+            field=field, value=value, source=source, fetched_at=NOW, observed_at=observed_at
+        )
+    baseline = None
+    if baseline_value is not None:
+        baseline = Snapshot(
+            ticker=symbol,
+            run_id=6,
+            as_of=BASELINE_AT,
+            values={
+                field: FieldValue(
+                    field=field, value=baseline_value, source=source, fetched_at=BASELINE_AT
+                )
+            },
+        )
+    return TickerReport(
+        context=TickerContext(ticker=symbol, macro=spec),
+        status="ok",
+        snapshot=Snapshot(
+            ticker=symbol, run_id=7, as_of=NOW, values=values, quarantined=quarantined or {}
+        ),
+        baseline=baseline,
+        events=tuple(events),
+        sources=(SourceHealth(source=source, status="ok"),),
+        baseline_run_id=6 if baseline is not None else None,
+        baseline_as_of=BASELINE_AT if baseline is not None else None,
+    )
+
+
+class TestMacroSection:
+    def test_level_delta_provenance_and_label_sort(self):
+        vix = _macro_ticker("^VIX", "VIX", value=25.4, baseline_value=15.0)
+        tnx = _macro_ticker(
+            "^TNX",
+            "US 10Y yield",
+            value=4.55,
+            baseline_value=4.4,
+            spec=MacroSpec(label="US 10Y yield", unit="%"),
+        )
+        out = render(_report([_quiet_ticker(), vix, tnx]))
+        assert "## Macro" in out
+        assert "- US 10Y yield: 4.55% (Δ +0.15 vs 2026-06-28) (yahoo, 2026-07-12 14:03Z)" in out
+        assert "- VIX: 25.40 (Δ +10.40 vs 2026-06-28) (yahoo, 2026-07-12 14:03Z)" in out
+        # Label sort: "US 10Y yield" before "VIX" despite ^TNX > ^VIX in ASCII.
+        assert out.index("US 10Y yield:") < out.index("VIX: 25.40")
+        # The macro series never appears in the Watchlist section.
+        watchlist = out[out.index("## Watchlist"):]
+        assert "^VIX" not in watchlist and "^TNX" not in watchlist
+
+    def test_delta_suppressed_at_zero(self):
+        vix = _macro_ticker("^VIX", "VIX", value=15.0, baseline_value=15.0)
+        out = render(_report([vix]))
+        assert "- VIX: 15.00 (yahoo, 2026-07-12 14:03Z)" in out
+        assert "Δ" not in out.split("## Macro")[1].split("##")[0]
+
+    def test_sanity_violation_flags_check_units(self):
+        """The ×10 regime-change guard: 45.45 'yield' renders as implausible,
+        never as a plain level."""
+        tnx = _macro_ticker(
+            "^TNX",
+            "US 10Y yield",
+            value=45.45,
+            spec=MacroSpec(label="US 10Y yield", unit="%", sanity=(0.0, 25.0)),
+        )
+        out = render(_report([tnx]))
+        assert "45.45%" in out
+        assert "⚠ implausible (outside sanity [0, 25]) — check units" in out
+
+    def test_spread_renders_iff_both_legs_accepted(self):
+        tnx = _macro_ticker(
+            "^TNX", "US 10Y yield", value=4.55, spec=MacroSpec(label="US 10Y yield", unit="%")
+        )
+        irx = _macro_ticker(
+            "^IRX", "US 3M yield", value=3.69, spec=MacroSpec(label="US 3M yield", unit="%")
+        )
+        both = render(_report([tnx, irx]))
+        assert "- 10Y − 3M spread: +0.86pp" in both
+        alone = render(_report([tnx]))
+        assert "spread" not in alone
+
+    def test_econ_series_renders_period_and_prior_print_window(self):
+        cpi = _macro_ticker(
+            "CPIAUCSL",
+            "CPI inflation (YoY)",
+            value=2.9,
+            baseline_value=3.2,
+            source=Source.FRED,
+            observed_at=datetime(2026, 6, 1, tzinfo=UTC),
+            spec=MacroSpec(
+                label="CPI inflation (YoY)", unit="%", decimals=1, source=Source.FRED,
+                transform="yoy_pct", alert_on_release=True,
+            ),
+        )
+        out = render(_report([cpi]))
+        assert (
+            "- CPI inflation (YoY): 2.9% (Δ -0.3 vs prior print) (fred, period 2026-06-01)"
+            in out
+        )
+
+    def test_crossed_line_marks_the_standing_level(self):
+        line = parse_thesis_check("price >= 25")
+        vix = _macro_ticker(
+            "^VIX", "VIX", value=25.4,
+            spec=MacroSpec(label="VIX", alert_when=(line.model_copy(update={"raw": "value >= 25"}),)),
+        )
+        out = render(_report([vix]))
+        assert "- VIX: 25.40 (yahoo, 2026-07-12 14:03Z) — ⚠ line crossed: value >= 25" in out
+
+    def test_quarantined_macro_series_renders_the_verdict(self):
+        stale = QuarantineHit(code=QuarantineCode.STALE, detail="quote 6 days old")
+        vix = _macro_ticker("^VIX", "VIX", quarantined={Field.PRICE: (stale,)})
+        out = render(_report([vix]))
+        assert "- VIX: ⚠ DATA QUARANTINED — quote 6 days old" in out
+
+    def test_no_macro_tickers_no_macro_section(self):
+        out = render(_report([_quiet_ticker()]))
+        assert "## Macro" not in out
+
+    def test_macro_events_render_in_changes(self):
+        events = (
+            MacroLineCrossed(
+                ticker="^VIX", label="VIX", check="value >= 25", observed=25.4,
+                unit="", decimals=2, newly=True,
+            ),
+            MacroShift(
+                ticker="^VIX", label="VIX", old=15.0, new=25.4, delta=10.4,
+                unit="", decimals=2, threshold=3.0, old_as_of=BASELINE_AT,
+            ),
+            MacroPrint(
+                ticker="^VIX", label="VIX", period=date(2026, 7, 1), value=25.4,
+                prev_value=15.0, delta=10.4, unit="", decimals=2,
+            ),
+        )
+        vix = _macro_ticker("^VIX", "VIX", value=25.4, baseline_value=15.0, events=events)
+        out = render(_report([vix]))
+        assert '- ⚠ LINE CROSSED — "value >= 25": VIX is at 25.40 (newly crossed)' in out
+        assert "- VIX 15.00 → 25.40 (+10.40, alert ≥ 3) vs 2026-06-28" in out
+        assert "- New print — VIX: 25.40 (period 2026-07-01), prior 15.00 (+10.40)" in out
+
+
+class TestBellwetherSection:
+    def _report_with(self, *bellwethers):
+        from argus.models import BellwetherEarning  # local: only this class uses it
+
+        return RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(_quiet_ticker(),), bellwethers=tuple(bellwethers),
+        )
+
+    def test_reported_and_upcoming_split_with_computed_surprise(self):
+        from argus.models import BellwetherEarning
+
+        out = render(
+            self._report_with(
+                BellwetherEarning(
+                    symbol="MSFT", report_date=date(2026, 7, 10), hour="amc",
+                    eps_estimate=3.05, eps_actual=3.11,
+                ),
+                BellwetherEarning(
+                    symbol="NVDA", report_date=date(2026, 7, 15), hour="amc",
+                    eps_estimate=1.05,
+                ),
+            )
+        )
+        assert "## Bellwether earnings (finnhub, unverified)" in out
+        assert "- MSFT (2026-07-10): EPS 3.11 vs 3.05 est (+2.0%)" in out
+        assert "- NVDA — 2026-07-15 amc (est 1.05)" in out
+        assert "never a delivery trigger" in out
+
+    def test_no_rows_no_section(self):
+        out = render(self._report_with())
+        assert "Bellwether" not in out
 
 
 class TestQuarantineTable:

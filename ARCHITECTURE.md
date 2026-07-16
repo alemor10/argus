@@ -585,6 +585,12 @@ the point.
 | Earnings results from the quoteSummary `earningsHistory` JSON module | yfinance `earnings_dates` (long history + announcement dates) | `earnings_dates` HTML-scrapes the calendar page — the most breakage-prone fetch class — while `earningsHistory` rides the same JSON transport as `t.info`. Cost: the key is the fiscal quarter END (announcement dates aren't carried) and history is ~4 quarters — plenty, since only first-seen rows ever fire. |
 | Only actual-bearing rows become earnings records; quarter-end natural key, first write wins | Record scheduled quarters too; allow revisions to update | A scheduled quarter is not a result (EarningsImminent already covers anticipation), and it lands cleanly once its actual appears under the same key. Revisions never rewrite what Argus first reported — the same immutability contract as scorecard marks. |
 | Earnings surprise computed from stored estimate/actual | Trust the source's `surprisePercent` | Two facts with obvious units beat one pre-scaled figure whose unit convention must be guessed; the event also stays reproducible from its own payload. |
+| Event-gated delivery is attribute-based (`newly`), file sink always writes | Enumerate delivery-worthy event kinds; gate the file too | New event kinds participate by default instead of silently never paging; the disk copy is the audit record and the skip is disclosed in the digest itself (note appended BEFORE the report assembles, so file and `report --run N` agree). |
+| Macro role = the persisted MacroSpec (nullable `run_tickers.macro` JSON) | A bare `role` column; extending Thresholds | Rendering the Macro section for run N needs label/unit/decimals/lines AS OF run N — a role flag alone breaks bit-for-bit `report --run N` after macro.yaml edits. Same precedent as thesis_checks (v4). |
+| Macro lines are new event kinds with locally inverted evaluation | Reuse ThesisDrift for level lines | Thesis checks breach when a condition STOPS holding; alert-when-true lines fire when it holds. Naive reuse pages whenever VIX is calm — permanently and backwards. Grammar/evaluator reused; interpretation inverted behind one fat-commented helper. |
+| Macro series fetch from exactly one source; equity event machinery off | Full source fan-out; shared thresholds | Finnhub `covers()` says yes to everything → per-run health noise for index symbols; a 5% default PriceMove fires constantly on VIX and 23bp of unchosen yield alerting. Quarantine transitions stay shared — a series going dark is news. |
+| FRED via keyless fredgraph.csv; transforms computed in the adapter | Keyed official API now; raw index levels reported | Zero-setup matches the free-first posture (eyes-open unofficial, one-module blast radius, keyed API documented as the upgrade); YoY/MoM from two points of the same official series is the EDGAR-ratio precedent, and "CPI YoY 3.5%" is the number a human actually watches. |
+| Bellwether earnings are claims-only and never open the delivery gate | Gate on megacap reports; verify through the v1 stack | In season bellwethers report near-daily — gating on them turns events-only back into posting-daily; verifying ten non-held names through the fetch→gate stack costs the rate budget the watchlist needs. Context, labeled as such. |
 
 ## Scout (discovery) — v1.1
 
@@ -691,6 +697,68 @@ Flow:
    drift and prints a per-ticker standing line ("3/4 checks holding" /
    "⚠ 1/4 BREACHED"). Held checks are silent — a holding thesis is the quiet
    good case.
+
+## Macro watch + daily pulse — v1.7
+
+Three pieces on the existing seams; nothing new is predicted or interpreted.
+
+**Event-gated delivery.** `argus watch --deliver events-only` (the daily cron
+mode; `always` stays the default and the Monday anchor): the file digest is
+written every run — the disk copy is the record — but Discord/email fire only
+when the run carries NEW information (`changes.has_new_information`).
+Attribute-based: every event counts unless it marks itself a re-fired standing
+state (`newly=False` — a thesis still breached, an earnings date already
+inside the reminder window at baseline, a macro line still crossed); a ticker
+going dark (status failed) always counts. A policy skip is disclosed in the
+digest header via a run note and exits 0 — it is policy, not failure; an
+attempted-and-failed delivery keeps the exit-1 contract. Disclosed semantics:
+at daily cadence `price_move_pct` measures DAILY moves; slow drift belongs to
+thesis checks and macro lines.
+
+**Macro watch.** The human lists series in `macro.yaml` (missing file →
+feature off): market quotes (Yahoo indices — `^TNX`, `^VIX`, …) and economic
+releases (FRED — CPI, payrolls, unemployment, policy rate) behind one config.
+Macro series are TickerContexts carrying a `MacroSpec` through the SAME
+engine — same gates, same observations rows, provenance free — fetched from
+exactly the one source their spec names. The spec is persisted WHOLE per run
+(`run_tickers.macro`, schema v7) so `report --run N` reproduces the Macro
+section bit-for-bit after the yaml changes. Econ values are a dedicated
+`ECON_VALUE` field (a monthly print is weeks old by nature — no staleness
+gate v1); FRED transforms (`yoy_pct`, `mom_change`) are computed in the
+adapter from the same officially published series (the EDGAR-ratio
+precedent), and the keyless `fredgraph.csv` endpoint is accepted eyes-open
+with the keyed official API as the upgrade path. Three event kinds, all
+rendered in Changes (the Discord headline carries only that section):
+
+- `MacroLineCrossed` — a human-drawn **alert-when-true** line ("value >= 25")
+  is currently true. Deliberately NOT ThesisDrift: thesis checks breach when
+  a condition STOPS holding, so reusing them would fire whenever VIX is calm
+  — the grammar and evaluator are reused, the interpretation is inverted
+  locally (crossed ⇔ holds). Re-fires while crossed, `newly` gates delivery.
+- `MacroPrint` — an econ series' period advanced: release day IS the news
+  (CPI day, jobs Friday), whatever the magnitude.
+- `MacroShift` — the series moved ≥ `alert_move` in its OWN units since the
+  last accepted baseline (absolute, never percent — 15bp is the unit of
+  interest, not "+3.3%"), rounded before compare.
+
+The equity machinery (PriceMove/targets/consensus/earnings/thesis) is OFF for
+macro contexts — a 5% default threshold fires constantly on VIX and 5% of a
+4.5% yield is 23bp nobody chose; quarantine transitions stay shared. The
+digest's Macro section shows the standing tri-state level per series
+(label-sorted), Δ vs baseline (suppressed at zero), a render-derived
+10Y − 3M spread when both legs are present, and a per-series `sanity` band
+rendered as "check units" (a human-drawn rail against silent unit regime
+changes — a render flag, never a gate). Watchlist ∩ macro symbols are
+refused at the config boundary (a shared symbol would double-insert the
+run_tickers PK and kill the run). Macro series get no PDF detail pages.
+
+**Bellwether earnings context.** `macro.yaml`'s `bellwethers:` list (≈10
+megacaps) renders a claims-labeled section — upcoming dates with estimates,
+actual-vs-estimate as they land — from ONE Finnhub calendar call per watch
+run, persisted per run (`bellwether_earnings`) for reproducibility. Never
+gated, never observations, and deliberately NOT a delivery trigger (in
+season bellwethers report near-daily, which would defeat the gating);
+fetch failures append a run note and never block the digest.
 
 ## Scout self-scoring — v1.5 ("grade the grader")
 

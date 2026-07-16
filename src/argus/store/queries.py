@@ -13,9 +13,11 @@ from argus.fields import Field
 from argus.models import (
     CHANGE_EVENT_ADAPTER,
     AnalystActionRecord,
+    BellwetherEarning,
     CompanyProfile,
     EarningsResultRecord,
     FieldValue,
+    MacroSpec,
     QuarantinedObservation,
     QuarantineHit,
     RunReport,
@@ -63,7 +65,8 @@ def snapshot(con: sqlite3.Connection, run_id: int, ticker: str) -> Snapshot | No
 
     values: dict[Field, FieldValue] = {}
     for row in con.execute(
-        """SELECT field, source, fetched_at, value_num, value_text, value_date, corroborated_by
+        """SELECT field, source, fetched_at, observed_at,
+                  value_num, value_text, value_date, corroborated_by
            FROM observations WHERE run_id = ? AND ticker = ? AND is_primary = 1""",
         (run_id, ticker),
     ):
@@ -103,8 +106,8 @@ def latest_accepted(
     # Restricted to watch runs, consistent with baseline_run: scout runs are
     # a different universe and must never seed a monitor baseline.
     row = con.execute(
-        """SELECT o.field, o.source, o.fetched_at, o.value_num, o.value_text, o.value_date,
-                  o.corroborated_by
+        """SELECT o.field, o.source, o.fetched_at, o.observed_at,
+                  o.value_num, o.value_text, o.value_date, o.corroborated_by
            FROM observations o
            JOIN runs r ON r.run_id = o.run_id
            WHERE o.ticker = ? AND o.field = ? AND o.is_primary = 1
@@ -279,6 +282,21 @@ def _scout_proposals(con: sqlite3.Connection, run_id: int) -> tuple[ScoutProposa
     )
 
 
+def _bellwether_earnings(con: sqlite3.Connection, run_id: int) -> tuple[BellwetherEarning, ...]:
+    """This run's persisted bellwether calendar window (claims-labeled)."""
+    rows = con.execute(
+        """SELECT symbol, report_date, hour, eps_estimate, eps_actual,
+                  revenue_estimate, revenue_actual
+           FROM bellwether_earnings WHERE run_id = ?
+           ORDER BY report_date, symbol""",
+        (run_id,),
+    ).fetchall()
+    return tuple(
+        BellwetherEarning.model_validate(dict(row) | {"hour": row["hour"] or ""})
+        for row in rows
+    )
+
+
 def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
     """Assemble the digest's full input entirely from SQL: persisted events,
     per-ticker snapshots with provenance, every quarantined observation
@@ -297,7 +315,7 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
     tickers = tuple(
         _ticker_report(con, run_id, row)
         for row in con.execute(
-            """SELECT ticker, status, error, thesis, thresholds, thesis_checks
+            """SELECT ticker, status, error, thesis, thresholds, thesis_checks, macro
                FROM run_tickers WHERE run_id = ? ORDER BY ticker""",
             (run_id,),
         )
@@ -315,6 +333,7 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
             if run["kind"] == "scout"
             else None
         ),
+        bellwethers=_bellwether_earnings(con, run_id) if run["kind"] == "watch" else (),
     )
 
 
@@ -371,6 +390,7 @@ def _ticker_report(con: sqlite3.Connection, run_id: int, rt: sqlite3.Row) -> Tic
             thesis_checks=tuple(
                 ThesisCheck.model_validate(c) for c in json.loads(rt["thesis_checks"])
             ),
+            macro=MacroSpec.model_validate_json(rt["macro"]) if rt["macro"] else None,
         ),
         status=rt["status"],
         snapshot=snapshot(con, run_id, ticker),
@@ -400,6 +420,7 @@ def _hydrate_field_value(row: sqlite3.Row) -> FieldValue:
         value=value,
         source=row["source"],
         fetched_at=row["fetched_at"],
+        observed_at=row["observed_at"],
         corroborated_by=corroborated,
     )
 

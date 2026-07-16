@@ -11,6 +11,7 @@ must not page weekly on a flaky free feed — and won't: partial data exits 0.
 import json
 import re
 from datetime import UTC, datetime
+from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -21,6 +22,9 @@ from argus import engine
 from argus.config import (
     Paths,
     build_contexts,
+    build_macro_contexts,
+    ensure_no_overlap,
+    load_macro_config,
     load_watch_config,
     load_watch_config_text,
     resolve_discord_webhook,
@@ -28,6 +32,7 @@ from argus.config import (
     resolve_paths,
     resolve_secrets,
 )
+from argus.fields import Source
 from argus.digest import (
     CompositeSink,
     DigestSink,
@@ -38,7 +43,7 @@ from argus.digest import (
 )
 from argus.thesis import parse_thesis_check
 from argus.gates import DEFAULT_PROFILE
-from argus.sources import EdgarSource, FinnhubSource, YahooSource
+from argus.sources import EdgarSource, FinnhubSource, FredSource, YahooSource
 from argus.sources.base import DataSource
 from argus.store import connect, migrate, queries
 
@@ -79,6 +84,102 @@ tickers: []
 #       - "analyst_rating in [strong_buy, buy]"
 """
 
+MACRO_TEMPLATE = """\
+# Argus macro watch — the market backdrop the digest carries beside your
+# watchlist. Two series kinds behind one file:
+#   yahoo (default) — live market quotes (^TNX yields, ^VIX, indexes)
+#   fred            — official economic releases (CPI, jobs, policy rate),
+#                     via the St. Louis Fed; a NEW PRINT is itself the alert.
+#
+# Alert knobs, all optional, all YOUR lines (Argus reports crossings, never
+# interprets):
+#   alert_move: absolute move in the series' OWN units since the last run
+#               (0.15 on a yield = 15bp). At daily cadence that means DAILY
+#               moves — slow drift shows in the Macro section's Δ instead.
+#   alert_when: alert-WHEN-TRUE level lines, e.g. "value >= 25" pages while
+#               VIX is at or above 25 (grammar: value <op> <number>).
+#   sanity:     [low, high] plausibility band — outside renders "check
+#               units" (guards a silent ×10 unit change at the source).
+#
+# Note: BTC-USD trades 24/7 — a Saturday alert_move can trigger a weekend
+# delivery when everything else is closed.
+
+series:
+  - symbol: "^TNX"
+    label: "US 10Y yield"
+    unit: "%"
+    alert_move: 0.15
+    sanity: [0, 25]
+  - symbol: "^IRX"
+    label: "US 3M yield"
+    unit: "%"
+    sanity: [0, 25]
+  - symbol: "^VIX"
+    label: "VIX"
+    alert_when: ["value >= 25"]
+  - symbol: "^GSPC"
+    label: "S&P 500"
+    decimals: 0
+  - symbol: "CPIAUCSL"
+    source: fred
+    transform: yoy_pct
+    label: "CPI inflation (YoY)"
+    unit: "%"
+    decimals: 1
+  - symbol: "PCEPILFE"
+    source: fred
+    transform: yoy_pct
+    label: "Core PCE inflation (YoY)"
+    unit: "%"
+    decimals: 1
+  - symbol: "UNRATE"
+    source: fred
+    label: "Unemployment rate"
+    unit: "%"
+    decimals: 1
+  - symbol: "PAYEMS"
+    source: fred
+    transform: mom_change
+    label: "Payrolls (MoM change)"
+    unit: "k"
+    decimals: 0
+  - symbol: "DFF"
+    source: fred
+    label: "Fed funds (effective)"
+    unit: "%"
+#  - symbol: "DX-Y.NYB"
+#    label: "US dollar index"
+#  - symbol: "GC=F"
+#    label: "Gold (front future)"
+#    decimals: 0
+#  - symbol: "BTC-USD"
+#    label: "Bitcoin"
+#    decimals: 0
+#  - symbol: "ICSA"
+#    source: fred
+#    label: "Initial jobless claims"
+#    decimals: 0
+#  - symbol: "MORTGAGE30US"
+#    source: fred
+#    label: "30Y mortgage rate"
+#    unit: "%"
+#  - symbol: "HOUST"
+#    source: fred
+#    label: "Housing starts (SAAR)"
+#    decimals: 0
+#  - symbol: "A191RL1Q225SBEA"
+#    source: fred
+#    label: "Real GDP (QoQ SAAR)"
+#    unit: "%"
+#    decimals: 1
+
+# Megacap earnings context — dates + estimates upcoming, actual vs estimate
+# as they land. Claims-labeled (finnhub, unverified), context only: it never
+# triggers a delivery and never enters the gated store. Empty list turns the
+# section off.
+bellwethers: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, TSLA, BRK-B, JPM]
+"""
+
 SCOUT_TEMPLATE = """\
 # Argus scout screening criteria — Quality-GARP, forward-looking. Every value
 # shown is the default; delete a line to keep its default, edit to tune.
@@ -99,15 +200,26 @@ top_n: 15                     # shortlist size sent through enrichment + gates
 """
 
 
-def _build_sinks(paths: Paths) -> DigestSink:
-    """File always; Discord/email when configured. Shared by watch and scout."""
-    sinks: list[DigestSink] = [FileDigestSink(paths.reports)]
+class DeliverPolicy(str, Enum):
+    """When the delivery channels (Discord/email) fire. The file sink always
+    writes — the disk copy is the record; the channels are the pager."""
+
+    ALWAYS = "always"
+    EVENTS_ONLY = "events-only"
+
+
+def _build_sinks(paths: Paths) -> tuple[DigestSink, list[DigestSink]]:
+    """(file sink — written every run; delivery channels — Discord/email when
+    configured). Callers compose them per delivery policy; kept flat so
+    CompositeSink error messages stay readable."""
+    file_sink = FileDigestSink(paths.reports)
+    channels: list[DigestSink] = []
     webhook = resolve_discord_webhook()
     if webhook is not None:
-        sinks.append(DiscordDigestSink(webhook))
+        channels.append(DiscordDigestSink(webhook))
     email = resolve_email_config()  # ValueError on half-configured — caller handles
     if email is not None:
-        sinks.append(
+        channels.append(
             EmailDigestSink(
                 host=email.host,
                 port=email.port,
@@ -117,13 +229,26 @@ def _build_sinks(paths: Paths) -> DigestSink:
                 recipient=email.recipient,
             )
         )
-    if len(sinks) == 1:
+    if not channels:
         typer.echo(
             "No delivery channel configured (ARGUS_DISCORD_WEBHOOK / ARGUS_EMAIL_TO) — "
             "digest lands on disk only."
         )
-        return sinks[0]
-    return CompositeSink(*sinks)
+    return file_sink, channels
+
+
+def _compose_sinks(
+    file_sink: DigestSink, channels: list[DigestSink], deliver: DeliverPolicy
+) -> tuple[DigestSink, DigestSink | None]:
+    """(always-sink, gated-sink-or-None) for engine.run. Under ALWAYS the
+    channels ride with the file sink exactly as before; under EVENTS_ONLY
+    they only fire when the run carries new information."""
+    if deliver is DeliverPolicy.EVENTS_ONLY and channels:
+        gated = channels[0] if len(channels) == 1 else CompositeSink(*channels)
+        return file_sink, gated
+    if channels:
+        return CompositeSink(file_sink, *channels), None
+    return file_sink, None
 
 
 def _pdf_artifact_builder():
@@ -143,7 +268,12 @@ def _pdf_artifact_builder():
         if report.kind == "scout":
             tickers = [p.ticker for p in report.scout if p.status == "proposed"]
         else:
-            tickers = [t.context.ticker for t in report.tickers if t.status != "failed"]
+            # Macro series get no chart pages (and cost no history fetches).
+            tickers = [
+                t.context.ticker
+                for t in report.tickers
+                if t.status != "failed" and t.context.macro is None
+            ]
         history = {ticker: fetch_history(ticker) for ticker in tickers}
         revenue_series = {ticker: fetch_annual_revenue(ticker) for ticker in tickers}
         filename = (
@@ -156,7 +286,38 @@ def _pdf_artifact_builder():
     return build
 
 
-def _build_sources() -> list[DataSource]:
+def _bellwether_step(bellwethers: tuple[str, ...]):
+    """before_digest hook for watch runs: one calendar GET, filtered to the
+    bellwether list, persisted per run (claims-labeled). Failures append a
+    run note — context is optional, the digest is not. Returns None when the
+    section is off (empty list / no Finnhub key)."""
+    from datetime import date, timedelta
+
+    from argus.store import writer
+
+    api_key = resolve_secrets().finnhub_api_key
+    if not bellwethers or not api_key:
+        return None
+    allow = {symbol.strip().upper() for symbol in bellwethers}
+
+    def step(con, run_id: int) -> None:
+        today = date.today()
+        try:
+            rows = [
+                r
+                for r in FinnhubSource(api_key).earnings_calendar(
+                    frm=today - timedelta(days=7), to=today + timedelta(days=7)
+                )
+                if r.symbol.upper() in allow
+            ]
+            writer.write_bellwether_earnings(con, run_id=run_id, rows=rows)
+        except Exception as exc:  # the section is context; the digest must land
+            writer.append_run_note(con, run_id=run_id, note=f"bellwether calendar unavailable: {exc}")
+
+    return step
+
+
+def _build_sources(fred_series: dict[str, str] | None = None) -> list[DataSource]:
     secrets = resolve_secrets()
     sources: list[DataSource] = [YahooSource()]
     if secrets.finnhub_api_key:
@@ -170,6 +331,8 @@ def _build_sources() -> list[DataSource]:
             "ARGUS_CONTACT_EMAIL unset — EDGAR fundamentals cross-checks will be "
             "skipped and disclosed."
         )
+    if fred_series:  # keyless; wired only when macro.yaml names fred series
+        sources.append(FredSource(fred_series))
     return sources
 
 
@@ -207,18 +370,41 @@ def watch(
     watchlist: Annotated[Optional[Path], typer.Option(help="Path to watchlist.yaml.")] = None,
     db: Annotated[Optional[Path], typer.Option(help="Path to the SQLite database.")] = None,
     reports: Annotated[Optional[Path], typer.Option(help="Digest output directory.")] = None,
+    deliver: Annotated[
+        DeliverPolicy,
+        typer.Option(
+            "--deliver",
+            help="When Discord/email fire: 'always' (weekly anchor) or 'events-only' "
+            "(daily cadence — channels post only when the run carries new information; "
+            "the file digest is always written).",
+        ),
+    ] = DeliverPolicy.ALWAYS,
 ) -> None:
     """Run the monitor: fetch → gate → snapshot → diff → digest."""
     paths = resolve_paths(root, watchlist=watchlist, db=db, reports=reports)
     if not paths.watchlist.exists():
         typer.echo(f"No watchlist at {paths.watchlist} — run `argus init` first.", err=True)
         raise typer.Exit(1)
-    contexts = build_contexts(load_watch_config(paths.watchlist))
     try:
-        sink = _build_sinks(paths)
+        macro_config = load_macro_config(paths.macro)
+        macro_contexts = build_macro_contexts(macro_config)
+        contexts = ensure_no_overlap(
+            build_contexts(load_watch_config(paths.watchlist)), macro_contexts
+        )
+    except Exception as exc:  # typo'd key / bad line / overlap: crisp refusal
+        typer.echo(f"Cannot build run contexts: {exc}", err=True)
+        raise typer.Exit(1) from exc
+    fred_series = {
+        ctx.ticker: ctx.macro.transform
+        for ctx in macro_contexts
+        if ctx.macro is not None and ctx.macro.source is Source.FRED
+    }
+    try:
+        file_sink, channels = _build_sinks(paths)
     except ValueError as exc:  # half-configured channel: refuse to run at all
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
+    sink, gated_sink = _compose_sinks(file_sink, channels, deliver)
     as_of = datetime.now(UTC)
     con = connect(paths.db)
     try:
@@ -226,13 +412,15 @@ def watch(
         outcome = engine.run(
             contexts,
             con=con,
-            sources=_build_sources(),
+            sources=_build_sources(fred_series),
             profile=DEFAULT_PROFILE,
             sink=sink,
             as_of=as_of,
             today=as_of.date(),
             app_version=argus.__version__,
             artifact_builder=_pdf_artifact_builder(),
+            gated_sink=gated_sink,
+            before_digest=_bellwether_step(macro_config.bellwethers),
         )
     finally:
         con.close()
@@ -268,11 +456,16 @@ def report(
 
 @app.command()
 def init(root: RootOpt = None) -> None:
-    """Scaffold starter watchlist.yaml + scout.yaml (never touches existing files)."""
+    """Scaffold starter watchlist.yaml + scout.yaml + macro.yaml (never
+    touches existing files)."""
     paths = resolve_paths(root)
     created = []
     paths.root.mkdir(parents=True, exist_ok=True)
-    for path, template in ((paths.watchlist, WATCHLIST_TEMPLATE), (paths.scout, SCOUT_TEMPLATE)):
+    for path, template in (
+        (paths.watchlist, WATCHLIST_TEMPLATE),
+        (paths.scout, SCOUT_TEMPLATE),
+        (paths.macro, MACRO_TEMPLATE),
+    ):
         if path.exists():
             typer.echo(f"{path} already exists — not touching it.", err=True)
             continue
@@ -308,10 +501,11 @@ def scout(root: RootOpt = None) -> None:
             for context in build_contexts(load_watch_config(paths.watchlist))
         }
     try:
-        sink = _build_sinks(paths)
+        file_sink, channels = _build_sinks(paths)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
+    sink, _ = _compose_sinks(file_sink, channels, DeliverPolicy.ALWAYS)
     as_of = datetime.now(UTC)
     con = connect(paths.db)
     try:

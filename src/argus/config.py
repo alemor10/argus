@@ -7,17 +7,21 @@ exactly what scout will construct differently later.
 """
 
 import os
+import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 import yaml
 from pydantic import BaseModel, ConfigDict, Field as PydanticField
 
-from argus.models import Thresholds, TickerContext
+from argus.fields import Field, Source
+from argus.models import MacroSpec, ThesisCheck, Thresholds, TickerContext
 from argus.thesis import parse_thesis_check
 
 DEFAULT_WATCHLIST = "watchlist.yaml"
 DEFAULT_SCOUT = "scout.yaml"
+DEFAULT_MACRO = "macro.yaml"
 DEFAULT_DB = "argus.db"
 DEFAULT_REPORTS = "reports"
 
@@ -27,6 +31,7 @@ class Paths:
     root: Path
     watchlist: Path
     scout: Path
+    macro: Path
     db: Path
     reports: Path
 
@@ -36,6 +41,7 @@ def resolve_paths(
     *,
     watchlist: Path | None = None,
     scout: Path | None = None,
+    macro: Path | None = None,
     db: Path | None = None,
     reports: Path | None = None,
 ) -> Paths:
@@ -45,6 +51,7 @@ def resolve_paths(
         root=base,
         watchlist=(watchlist or base / DEFAULT_WATCHLIST).resolve(),
         scout=(scout or base / DEFAULT_SCOUT).resolve(),
+        macro=(macro or base / DEFAULT_MACRO).resolve(),
         db=(db or base / DEFAULT_DB).resolve(),
         reports=(reports or base / DEFAULT_REPORTS).resolve(),
     )
@@ -102,6 +109,117 @@ def build_contexts(config: WatchConfig) -> list[TickerContext]:
             )
         )
     return contexts
+
+
+class MacroSeriesEntry(BaseModel):
+    """One macro.yaml series. Config is the fail-loudly boundary: unknown
+    keys, bad transforms, and malformed alert lines all error here, never
+    mid-run."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    symbol: str = PydanticField(min_length=1)
+    label: str = PydanticField(min_length=1)
+    source: Literal["yahoo", "fred"] = "yahoo"
+    transform: Literal["level", "yoy_pct", "mom_change"] = "level"
+    unit: str = ""
+    decimals: int = PydanticField(default=2, ge=0, le=6)
+    alert_move: float | None = PydanticField(default=None, gt=0)
+    alert_on_release: bool | None = None  # None → fred defaults on, yahoo off
+    sanity: tuple[float, float] | None = None
+    alert_when: tuple[str, ...] = ()
+
+
+class MacroConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    series: tuple[MacroSeriesEntry, ...] = ()
+    bellwethers: tuple[str, ...] = ()  # megacap earnings-context list (claims-labeled)
+
+
+def load_macro_config(path: Path) -> MacroConfig:
+    """Missing file → feature off (empty config); present file → strict."""
+    if not path.exists():
+        return MacroConfig()
+    return load_macro_config_text(path.read_text(encoding="utf-8"))
+
+
+def load_macro_config_text(text: str) -> MacroConfig:
+    raw = yaml.safe_load(text) or {}
+    return MacroConfig.model_validate(raw)
+
+
+# `value` is the human-facing token for "this series' number" — mapped to the
+# concrete field (PRICE for market quotes, ECON_VALUE for econ prints) so the
+# thesis-check grammar is reused without leaking storage names into yaml.
+_VALUE_ALIAS = re.compile(r"^value\b")
+
+
+def _parse_alert_line(raw: str, value_field: Field, symbol: str) -> ThesisCheck:
+    text = " ".join(raw.split())
+    rewritten = _VALUE_ALIAS.sub(value_field.value, text, count=1)
+    check = parse_thesis_check(rewritten)
+    if check.field is not value_field:
+        raise ValueError(
+            f"{symbol}: macro alert lines watch the series' value — "
+            f'write "value >= …", got {raw!r}'
+        )
+    # Render the HUMAN's spelling everywhere (digest, events), not the
+    # storage field name the alias resolved to.
+    return check.model_copy(update={"raw": text})
+
+
+def build_macro_contexts(config: MacroConfig) -> list[TickerContext]:
+    """macro.yaml → macro-role TickerContexts. Duplicate symbols error here
+    (they would violate the run_tickers primary key mid-run); every alert
+    line parses now or the run refuses to start."""
+    contexts: list[TickerContext] = []
+    seen: set[str] = set()
+    for entry in config.series:
+        symbol = entry.symbol.strip()
+        if symbol.upper() in seen:
+            raise ValueError(f"duplicate macro series: {symbol}")
+        seen.add(symbol.upper())
+        source = Source(entry.source)
+        value_field = Field.ECON_VALUE if source is Source.FRED else Field.PRICE
+        try:
+            lines = tuple(
+                _parse_alert_line(raw, value_field, symbol) for raw in entry.alert_when
+            )
+            spec = MacroSpec(
+                label=entry.label,
+                unit=entry.unit,
+                decimals=entry.decimals,
+                source=source,
+                transform=entry.transform,
+                alert_move=entry.alert_move,
+                alert_on_release=(
+                    entry.alert_on_release
+                    if entry.alert_on_release is not None
+                    else source is Source.FRED
+                ),
+                sanity=entry.sanity,
+                alert_when=lines,
+            )
+        except ValueError as exc:
+            raise ValueError(f"macro series {symbol}: {exc}") from exc
+        contexts.append(TickerContext(ticker=symbol, macro=spec))
+    return contexts
+
+
+def ensure_no_overlap(
+    watch: list[TickerContext], macro: list[TickerContext]
+) -> list[TickerContext]:
+    """watch + macro, refusing shared symbols — a ticker on both lists would
+    double-insert the run_tickers primary key and kill the whole run."""
+    watched = {ctx.ticker.upper() for ctx in watch}
+    collisions = sorted(ctx.ticker for ctx in macro if ctx.ticker.upper() in watched)
+    if collisions:
+        raise ValueError(
+            "these symbols are on both watchlist.yaml and macro.yaml — remove one: "
+            + ", ".join(collisions)
+        )
+    return [*watch, *macro]
 
 
 @dataclass(frozen=True)

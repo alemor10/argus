@@ -4,7 +4,7 @@ never lost) and the canonical event ordering the digest and store rely on."""
 
 from datetime import UTC, date, datetime, timedelta
 
-from argus.changes import detect
+from argus.changes import detect, has_new_information
 from argus.fields import Field, QuarantineCode, Source
 from argus.models import (
     AnalystAction,
@@ -16,15 +16,24 @@ from argus.models import (
     FieldQuarantined,
     FieldRecovered,
     FieldValue,
+    MacroLineCrossed,
+    MacroPrint,
+    MacroShift,
+    MacroSpec,
     PriceMove,
     QuarantineHit,
+    RunReport,
     Snapshot,
     TargetMove,
+    ThesisDrift,
     Thresholds,
     TickerContext,
+    TickerReport,
 )
+from argus.thesis import parse_thesis_check
 
 NOW = datetime(2026, 7, 12, 14, 0, tzinfo=UTC)
+YESTERDAY = datetime(2026, 7, 11, 14, 0, tzinfo=UTC)
 LAST_WEEK = datetime(2026, 7, 5, 14, 0, tzinfo=UTC)
 TWO_WEEKS_AGO = datetime(2026, 6, 28, 14, 0, tzinfo=UTC)
 TODAY = date(2026, 7, 12)
@@ -32,8 +41,10 @@ TODAY = date(2026, 7, 12)
 STALE_HIT = QuarantineHit(code=QuarantineCode.STALE, detail="observed_at 6 days old")
 
 
-def _fv(field, value, fetched_at=LAST_WEEK, source=Source.YAHOO):
-    return FieldValue(field=field, value=value, source=source, fetched_at=fetched_at)
+def _fv(field, value, fetched_at=LAST_WEEK, source=Source.YAHOO, observed_at=None):
+    return FieldValue(
+        field=field, value=value, source=source, fetched_at=fetched_at, observed_at=observed_at
+    )
 
 
 def _snap(run_id, values=None, quarantined=None, ticker="NVDA", as_of=NOW):
@@ -323,6 +334,50 @@ class TestEarningsImminent:
             EarningsImminent(ticker="NVDA", earnings_date=d, days_until=4)
         ]
 
+    def test_reminder_already_seen_at_baseline_is_not_newly(self):
+        """Daily cadence: the same date was inside the window yesterday — the
+        re-fired reminder must not re-page under event-gated delivery."""
+        d = TODAY + timedelta(days=3)
+        baseline = _snap(
+            1, {Field.NEXT_EARNINGS_DATE: _fv(Field.NEXT_EARNINGS_DATE, d)}, as_of=YESTERDAY
+        )
+        [event] = self._events(d, baseline=baseline)
+        assert event.newly is False
+
+    def test_entering_the_window_is_newly(self):
+        """Known at baseline but OUTSIDE the window then — crossing in is news."""
+        d = TODAY + timedelta(days=7)  # 14 days out as of LAST_WEEK
+        baseline = _snap(
+            1, {Field.NEXT_EARNINGS_DATE: _fv(Field.NEXT_EARNINGS_DATE, d)}, as_of=LAST_WEEK
+        )
+        [event] = self._events(d, baseline=baseline)
+        assert event.newly is True
+
+    def test_rescheduled_date_is_newly(self):
+        old = TODAY + timedelta(days=2)
+        new = TODAY + timedelta(days=5)
+        baseline = _snap(
+            1, {Field.NEXT_EARNINGS_DATE: _fv(Field.NEXT_EARNINGS_DATE, old)}, as_of=YESTERDAY
+        )
+        [event] = self._events(new, baseline=baseline)
+        assert event.newly is True
+
+    def test_gap_fallback_prevents_repage(self):
+        """The baseline run missed the field (outage) but an older run had the
+        same in-window date — the reader HAS seen it; not newly."""
+        d = TODAY + timedelta(days=3)
+        baseline = _snap(2, as_of=YESTERDAY)  # field absent this run
+        older = _fv(Field.NEXT_EARNINGS_DATE, d, fetched_at=TWO_WEEKS_AGO)
+        current = _snap(
+            3, {Field.NEXT_EARNINGS_DATE: _fv(Field.NEXT_EARNINGS_DATE, d, fetched_at=NOW)}
+        )
+        [event] = _detect(
+            baseline,
+            current,
+            latest_accepted=lambda f: older if f is Field.NEXT_EARNINGS_DATE else None,
+        )
+        assert event.newly is False
+
 
 class TestFieldQuarantined:
     def test_accepted_to_quarantined_transition_carries_reasons(self):
@@ -412,6 +467,265 @@ class TestFirstRun:
         current = _snap(2, {Field.PRICE: _fv(Field.PRICE, 101.0, fetched_at=NOW)})
         events = _detect(baseline, current, new_earnings=[self.FIRST_RUN_EARNINGS])
         assert [e.kind for e in events] == ["earnings_reported"]
+
+
+def _macro_ctx(ticker="^VIX", **spec_overrides):
+    spec = dict(label="VIX")
+    spec.update(spec_overrides)
+    return TickerContext(ticker=ticker, macro=MacroSpec(**spec))
+
+
+def _vix_snap(run_id, value, *, as_of=NOW, fetched_at=None):
+    return _snap(
+        run_id,
+        {Field.PRICE: _fv(Field.PRICE, value, fetched_at=fetched_at or as_of)},
+        ticker="^VIX",
+        as_of=as_of,
+    )
+
+
+class TestMacroShift:
+    def _detect_shift(self, old_value, new_value, **spec):
+        ctx = _macro_ctx(alert_move=3.0, **spec)
+        baseline = _vix_snap(1, old_value, as_of=LAST_WEEK)
+        current = _vix_snap(2, new_value)
+        return detect(baseline, current, ctx, (), TODAY, latest_accepted=_no_fallback)
+
+    def test_at_or_above_threshold_fires_with_delta_and_window(self):
+        events = self._detect_shift(15.0, 25.4)
+        assert events == [
+            MacroShift(
+                ticker="^VIX", label="VIX", old=15.0, new=25.4, delta=10.4,
+                unit="", decimals=2, threshold=3.0, old_as_of=LAST_WEEK,
+            )
+        ]
+
+    def test_below_threshold_is_silent(self):
+        assert self._detect_shift(15.0, 16.0) == []
+
+    def test_delta_rounds_to_decimals_before_the_compare(self):
+        """The printed number must justify the event (the PriceMove rule):
+        a raw 0.149 move rounds to the 0.15 threshold and fires; a raw
+        0.1449 rounds to 0.14 and stays silent."""
+        ctx = _macro_ctx(ticker="^TNX", label="US 10Y yield", unit="%", alert_move=0.15)
+        baseline = _snap(
+            1, {Field.PRICE: _fv(Field.PRICE, 4.545)}, ticker="^TNX", as_of=LAST_WEEK
+        )
+        fires = _snap(2, {Field.PRICE: _fv(Field.PRICE, 4.694, fetched_at=NOW)}, ticker="^TNX")
+        [event] = detect(baseline, fires, ctx, (), TODAY, latest_accepted=_no_fallback)
+        assert event.delta == 0.15
+        quiet = _snap(2, {Field.PRICE: _fv(Field.PRICE, 4.6899, fetched_at=NOW)}, ticker="^TNX")
+        assert detect(baseline, quiet, ctx, (), TODAY, latest_accepted=_no_fallback) == []
+
+    def test_gap_falls_back_to_latest_accepted(self):
+        ctx = _macro_ctx(alert_move=3.0)
+        baseline = _snap(2, ticker="^VIX", as_of=YESTERDAY)  # outage: field absent
+        current = _vix_snap(3, 25.4)
+        older = _fv(Field.PRICE, 15.0, fetched_at=TWO_WEEKS_AGO)
+        [event] = detect(
+            baseline, current, ctx, (), TODAY,
+            latest_accepted=lambda f: older if f is Field.PRICE else None,
+        )
+        assert event.kind == "macro_shift"
+        assert event.old_as_of == TWO_WEEKS_AGO  # reported late, never lost
+
+    def test_first_run_establishes_baseline_silently(self):
+        ctx = _macro_ctx(alert_move=3.0)
+        assert detect(None, _vix_snap(1, 25.4), ctx, (), TODAY, latest_accepted=_no_fallback) == []
+
+    def test_no_alert_move_never_shifts(self):
+        ctx = _macro_ctx()  # alert_move None
+        baseline = _vix_snap(1, 15.0, as_of=LAST_WEEK)
+        current = _vix_snap(2, 45.0)
+        assert detect(baseline, current, ctx, (), TODAY, latest_accepted=_no_fallback) == []
+
+    def test_equity_machinery_is_off_for_macro_contexts(self):
+        """A 69% move fires no PriceMove, an in-window earnings date no
+        EarningsImminent — 5% of VIX is routine and nobody chose it."""
+        ctx = _macro_ctx()
+        baseline = _vix_snap(1, 15.0, as_of=LAST_WEEK)
+        current = _snap(
+            2,
+            {
+                Field.PRICE: _fv(Field.PRICE, 25.4, fetched_at=NOW),
+                Field.NEXT_EARNINGS_DATE: _fv(
+                    Field.NEXT_EARNINGS_DATE, TODAY + timedelta(days=3), fetched_at=NOW
+                ),
+            },
+            ticker="^VIX",
+        )
+        assert detect(baseline, current, ctx, (), TODAY, latest_accepted=_no_fallback) == []
+
+    def test_quarantined_now_is_a_verdict_transition_not_a_shift(self):
+        ctx = _macro_ctx(alert_move=3.0)
+        baseline = _vix_snap(1, 15.0, as_of=LAST_WEEK)
+        current = _snap(2, quarantined={Field.PRICE: (STALE_HIT,)}, ticker="^VIX")
+        events = detect(baseline, current, ctx, (), TODAY, latest_accepted=_never_called)
+        assert events == [
+            FieldQuarantined(ticker="^VIX", field=Field.PRICE, reasons=(STALE_HIT,))
+        ]
+
+
+class TestMacroLineCrossed:
+    LINE = parse_thesis_check("price >= 25")
+
+    def _ctx(self, *lines):
+        return _macro_ctx(alert_when=tuple(lines or (self.LINE,)))
+
+    def test_crossing_fires_newly(self):
+        baseline = _vix_snap(1, 20.0, as_of=LAST_WEEK)
+        current = _vix_snap(2, 25.4)
+        events = detect(baseline, current, self._ctx(), (), TODAY, latest_accepted=_no_fallback)
+        assert events == [
+            MacroLineCrossed(
+                ticker="^VIX", label="VIX", check="price >= 25", observed=25.4,
+                unit="", decimals=2, newly=True,
+            )
+        ]
+
+    def test_still_crossed_refires_but_not_newly(self):
+        baseline = _vix_snap(1, 26.0, as_of=YESTERDAY)
+        current = _vix_snap(2, 25.4)
+        [event] = detect(baseline, current, self._ctx(), (), TODAY, latest_accepted=_no_fallback)
+        assert event.newly is False  # suppression's failure mode is silence — refire, quietly
+
+    def test_uncrossed_line_is_silent_the_inversion_regression(self):
+        """THE inversion guard: thesis machinery fires when a condition stops
+        holding — wired naively, a calm VIX (20 < 25) would page forever."""
+        baseline = _vix_snap(1, 18.0, as_of=LAST_WEEK)
+        current = _vix_snap(2, 20.0)
+        assert detect(baseline, current, self._ctx(), (), TODAY, latest_accepted=_no_fallback) == []
+
+    def test_first_run_crossing_fires(self):
+        """A line crossed on day one needs no history (thesis-drift precedent)."""
+        events = detect(None, _vix_snap(1, 25.4), self._ctx(), (), TODAY, latest_accepted=_no_fallback)
+        assert [e.kind for e in events] == ["macro_line_crossed"]
+        assert events[0].newly is True
+
+    def test_quarantined_value_is_undeterminable_not_crossed(self):
+        baseline = _vix_snap(1, 26.0, as_of=LAST_WEEK)
+        current = _snap(2, quarantined={Field.PRICE: (STALE_HIT,)}, ticker="^VIX")
+        events = detect(baseline, current, self._ctx(), (), TODAY, latest_accepted=_never_called)
+        assert [e.kind for e in events] == ["field_quarantined"]
+
+
+class TestMacroPrint:
+    JUNE = datetime(2026, 6, 1, tzinfo=UTC)
+    JULY = datetime(2026, 7, 1, tzinfo=UTC)
+
+    def _cpi_ctx(self, **overrides):
+        spec = dict(
+            label="CPI inflation (YoY)", unit="%", decimals=1,
+            source=Source.FRED, transform="yoy_pct", alert_on_release=True,
+        )
+        spec.update(overrides)
+        return _macro_ctx(ticker="CPIAUCSL", **spec)
+
+    def _cpi_snap(self, run_id, value, period, *, as_of=NOW):
+        return _snap(
+            run_id,
+            {
+                Field.ECON_VALUE: _fv(
+                    Field.ECON_VALUE, value, source=Source.FRED,
+                    fetched_at=as_of, observed_at=period,
+                )
+            },
+            ticker="CPIAUCSL",
+            as_of=as_of,
+        )
+
+    def test_new_period_fires_a_print(self):
+        baseline = self._cpi_snap(1, 3.2, self.JUNE, as_of=LAST_WEEK)
+        current = self._cpi_snap(2, 2.9, self.JULY)
+        events = detect(baseline, current, self._cpi_ctx(), (), TODAY, latest_accepted=_no_fallback)
+        assert events == [
+            MacroPrint(
+                ticker="CPIAUCSL", label="CPI inflation (YoY)", period=date(2026, 7, 1),
+                value=2.9, prev_value=3.2, delta=-0.3, unit="%", decimals=1,
+            )
+        ]
+
+    def test_same_period_refetch_is_silent(self):
+        baseline = self._cpi_snap(1, 3.2, self.JUNE, as_of=YESTERDAY)
+        current = self._cpi_snap(2, 3.2, self.JUNE)
+        assert detect(baseline, current, self._cpi_ctx(), (), TODAY, latest_accepted=_no_fallback) == []
+
+    def test_value_unchanged_new_period_still_fires(self):
+        """The print is the news, not the delta — an unchanged unemployment
+        rate on jobs day is still jobs day."""
+        baseline = self._cpi_snap(1, 3.2, self.JUNE, as_of=LAST_WEEK)
+        current = self._cpi_snap(2, 3.2, self.JULY)
+        [event] = detect(baseline, current, self._cpi_ctx(), (), TODAY, latest_accepted=_no_fallback)
+        assert event.kind == "macro_print"
+        assert event.delta == 0.0
+
+    def test_first_run_is_baseline_not_news(self):
+        assert (
+            detect(None, self._cpi_snap(1, 3.2, self.JUNE), self._cpi_ctx(), (), TODAY,
+                   latest_accepted=_no_fallback)
+            == []
+        )
+
+    def test_release_alerting_can_be_turned_off(self):
+        baseline = self._cpi_snap(1, 3.2, self.JUNE, as_of=LAST_WEEK)
+        current = self._cpi_snap(2, 2.9, self.JULY)
+        ctx = self._cpi_ctx(alert_on_release=False)
+        assert detect(baseline, current, ctx, (), TODAY, latest_accepted=_no_fallback) == []
+
+
+class TestHasNewInformation:
+    """The event-gated delivery decision — attribute-based: any event is news
+    unless it marks itself a re-fired standing state (newly=False)."""
+
+    def _report(self, *tickers):
+        return RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="complete", tickers=tuple(tickers)
+        )
+
+    def _ticker(self, events=(), status="ok", ticker="NVDA"):
+        return TickerReport(
+            context=TickerContext(ticker=ticker), status=status, events=tuple(events)
+        )
+
+    def test_empty_run_is_quiet(self):
+        assert has_new_information(self._report()) is False
+        assert has_new_information(self._report(self._ticker())) is False
+
+    def test_any_inherently_new_event_delivers(self):
+        move = PriceMove(
+            ticker="NVDA", old=100.0, new=110.0, pct=10.0, threshold=5.0, old_as_of=LAST_WEEK
+        )
+        assert has_new_information(self._report(self._ticker(events=(move,)))) is True
+
+    def test_refired_standing_states_stay_quiet(self):
+        standing = (
+            ThesisDrift(
+                ticker="NVDA", check="gross_margin >= 65%", field=Field.GROSS_MARGIN,
+                observed=0.60, newly=False,
+            ),
+            EarningsImminent(
+                ticker="NVDA", earnings_date=TODAY + timedelta(days=3), days_until=3, newly=False
+            ),
+        )
+        assert has_new_information(self._report(self._ticker(events=standing))) is False
+
+    def test_newly_breached_thesis_delivers(self):
+        drift = ThesisDrift(
+            ticker="NVDA", check="gross_margin >= 65%", field=Field.GROSS_MARGIN,
+            observed=0.60, newly=True,
+        )
+        assert has_new_information(self._report(self._ticker(events=(drift,)))) is True
+
+    def test_failed_ticker_delivers(self):
+        """A name going dark is news even with zero events."""
+        assert has_new_information(self._report(self._ticker(status="failed"))) is True
+
+    def test_one_eventful_ticker_among_quiet_ones_delivers(self):
+        move = PriceMove(
+            ticker="AAPL", old=100.0, new=110.0, pct=10.0, threshold=5.0, old_as_of=LAST_WEEK
+        )
+        report = self._report(self._ticker(), self._ticker(events=(move,), ticker="AAPL"))
+        assert has_new_information(report) is True
 
 
 class TestCanonicalOrdering:

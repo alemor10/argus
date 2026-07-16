@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -83,6 +83,25 @@ CREATE TABLE IF NOT EXISTS earnings_results (
     PRIMARY KEY (ticker, quarter_end)
 ) WITHOUT ROWID;
 """,
+    # v1.7: macro watch (run_tickers carries the MacroSpec in force at run
+    # time — NULL = watch role) + the bellwether earnings context table.
+    # Guarded ADD COLUMN + IF NOT EXISTS: idempotent like v3/v4/v5.
+    6: lambda con: (
+        _add_column_if_absent(con, "run_tickers", "macro", "TEXT"),
+        con.execute(
+            """CREATE TABLE IF NOT EXISTS bellwether_earnings (
+    run_id           INTEGER NOT NULL REFERENCES runs(run_id),
+    symbol           TEXT    NOT NULL,
+    report_date      TEXT    NOT NULL,
+    hour             TEXT,
+    eps_estimate     REAL,
+    eps_actual       REAL,
+    revenue_estimate REAL,
+    revenue_actual   REAL,
+    PRIMARY KEY (run_id, symbol, report_date)
+) WITHOUT ROWID"""
+        ),
+    ),
 }
 
 

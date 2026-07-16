@@ -5,9 +5,10 @@ line here, plus priority entries in fields.SPECS."""
 from argus.sources.base import DataSource, FetchResult, SourceError
 from argus.sources.edgar import EdgarSource
 from argus.sources.finnhub import FinnhubSource
+from argus.sources.fred import FredSource
 from argus.sources.yahoo import YahooSource
 
-ALL_SOURCE_TYPES: tuple[type, ...] = (YahooSource, EdgarSource, FinnhubSource)
+ALL_SOURCE_TYPES: tuple[type, ...] = (YahooSource, EdgarSource, FinnhubSource, FredSource)
 
 __all__ = [
     "ALL_SOURCE_TYPES",
@@ -15,6 +16,7 @@ __all__ = [
     "EdgarSource",
     "FetchResult",
     "FinnhubSource",
+    "FredSource",
     "SourceError",
     "YahooSource",
 ]

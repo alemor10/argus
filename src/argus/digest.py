@@ -20,6 +20,10 @@ from argus.models import (
     EarningsReported,
     FieldQuarantined,
     FieldRecovered,
+    FieldValue,
+    MacroLineCrossed,
+    MacroPrint,
+    MacroShift,
     PriceMove,
     QuarantineHit,
     RunReport,
@@ -92,10 +96,17 @@ def render(report: RunReport) -> str:
             _scout_footer(report),
         )
     else:
-        sections = (
-            _header(report),
-            _changes_section(tickers),
-            _watchlist_section(tickers),
+        watch = [t for t in tickers if t.context.macro is None]
+        macro = [t for t in tickers if t.context.macro is not None]
+        parts: list[list[str]] = [_header(report)]
+        if macro:
+            parts.append(_macro_section(macro))
+        # Changes reads equities first, then macro — both alphabetical.
+        parts.append(_changes_section(watch + macro))
+        parts.append(_watchlist_section(watch))
+        if report.bellwethers:
+            parts.append(_bellwether_section(report))
+        sections = tuple(parts) + (
             _quarantine_section(tickers),
             _health_section(tickers),
             _footer(report),
@@ -299,6 +310,94 @@ def _scout_footer(report: RunReport) -> list[str]:
     ]
 
 
+# One render-derived context line per pair, shown iff BOTH legs carry an
+# accepted value this run — derived at render from accepted values only
+# (the sanctioned derived-metric path). Config-driven spreads are the
+# upgrade path if more are ever wanted.
+_SPREAD_PAIRS: tuple[tuple[str, str, str], ...] = (("^TNX", "^IRX", "10Y − 3M spread"),)
+
+
+def _macro_section(tickers: Sequence[TickerReport]) -> list[str]:
+    """The market backdrop: one tri-state line per series, label-sorted
+    (ASCII '^' sorts after 'Z', so symbol order reads wrong). Alerts live in
+    the Changes flow — the Discord headline only carries that section; this
+    section is the standing level."""
+    lines = ["## Macro", ""]
+    ordered = sorted(tickers, key=lambda t: (t.context.macro.label, t.context.ticker))
+    lines += [_macro_line(t) for t in ordered]
+    spreads = _spread_lines(tickers)
+    if spreads:
+        lines += ["", *spreads]
+    return lines
+
+
+def _macro_line(ticker: TickerReport) -> str:
+    spec = ticker.context.macro
+    assert spec is not None  # only macro-role tickers reach this section
+    label = spec.label
+    snapshot = ticker.snapshot
+    if snapshot is None:
+        return f"- {label}: fetch failed — no data this run ({ticker.error or 'unknown error'})"
+    fv = snapshot.values.get(spec.value_field)
+    if fv is None:
+        hits = snapshot.quarantined.get(spec.value_field)
+        if hits:
+            return f"- {label}: ⚠ DATA QUARANTINED — {_details(hits)}"
+        return f"- {label}: — no data ({_no_data_cause(spec.value_field, ticker)})"
+    line = f"- {label}: {fv.value:.{spec.decimals}f}{spec.unit}"
+    delta = _macro_delta(ticker, fv)
+    if delta:
+        line += f" ({delta})"
+    if spec.source == Source.FRED and fv.observed_at is not None:
+        line += f" ({fv.source.value}, period {fv.observed_at.date().isoformat()})"
+    else:
+        line += f" ({fv.source.value}, {_ts(fv.fetched_at)})"
+    if spec.sanity is not None and not (spec.sanity[0] <= fv.value <= spec.sanity[1]):
+        low, high = spec.sanity
+        line += f" — ⚠ implausible (outside sanity [{low:g}, {high:g}]) — check units"
+    for result in evaluate_thesis_checks(spec.alert_when, snapshot):
+        if result.status == "holds":  # crossed ⇔ holds; see changes._macro_events
+            line += f" — ⚠ line crossed: {result.check.raw}"
+    return line
+
+
+def _macro_delta(ticker: TickerReport, fv: FieldValue) -> str:
+    """Δ vs the baseline snapshot's value, suppressed at zero (quiet weekends
+    render clean, the held-checks-are-silent precedent). Econ series compare
+    print-to-print, so the window reads 'prior print' rather than a date."""
+    spec = ticker.context.macro
+    baseline = ticker.baseline
+    if spec is None or baseline is None:
+        return ""
+    old = baseline.values.get(spec.value_field)
+    if old is None or not isinstance(old.value, (int, float)):
+        return ""
+    delta = round(fv.value - old.value, spec.decimals)
+    if delta == 0:
+        return ""
+    window = "prior print" if spec.source == Source.FRED else baseline.as_of.date().isoformat()
+    return f"Δ {delta:+.{spec.decimals}f} vs {window}"
+
+
+def _spread_lines(tickers: Sequence[TickerReport]) -> list[str]:
+    by_symbol = {t.context.ticker: t for t in tickers}
+    lines = []
+    for a, b, label in _SPREAD_PAIRS:
+        va = _accepted_price(by_symbol.get(a))
+        vb = _accepted_price(by_symbol.get(b))
+        if va is None or vb is None:
+            continue
+        lines.append(f"- {label}: {va - vb:+.2f}pp _(derived at render from the two yields)_")
+    return lines
+
+
+def _accepted_price(ticker: TickerReport | None) -> float | None:
+    if ticker is None or ticker.snapshot is None:
+        return None
+    fv = ticker.snapshot.values.get(Field.PRICE)
+    return fv.value if fv is not None and isinstance(fv.value, (int, float)) else None
+
+
 def _changes_section(tickers: Sequence[TickerReport]) -> list[str]:
     lines = ["## Changes", ""]
     if not any(t.events for t in tickers):
@@ -351,7 +450,8 @@ def _watchlist_section(tickers: Sequence[TickerReport]) -> list[str]:
         thesis_line = _thesis_standing(ticker)
         if thesis_line:
             lines += [thesis_line, ""]
-        lines += [_field_line(field, ticker) for field in Field]
+        # ECON_VALUE is the macro-only field — an equity panel never carries it.
+        lines += [_field_line(field, ticker) for field in Field if field is not Field.ECON_VALUE]
         lines.append("")
     return lines
 
@@ -376,6 +476,44 @@ def _thesis_standing(ticker: TickerReport) -> str:
     if unverifiable:
         summary += f" ({unverifiable} unverifiable this run)"
     return f"_{summary}_"
+
+
+def _bellwether_section(report: RunReport) -> list[str]:
+    """Megacap earnings context — dates and estimates ahead, actual vs
+    estimate as they land. Single-source claims: labeled, never gated, and
+    deliberately NOT a delivery trigger (in season these names report almost
+    daily, which would defeat event-gated delivery)."""
+    lines = ["## Bellwether earnings (finnhub, unverified)", ""]
+    reported = sorted(
+        (b for b in report.bellwethers if b.eps_actual is not None),
+        key=lambda b: (b.report_date, b.symbol),
+    )
+    upcoming = sorted(
+        (b for b in report.bellwethers if b.eps_actual is None),
+        key=lambda b: (b.report_date, b.symbol),
+    )
+    if reported:
+        lines.append("Reported:")
+        for b in reported:
+            line = f"- {b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
+            if b.eps_estimate is not None:
+                line += f" vs {b.eps_estimate:.2f} est"
+                if b.eps_estimate != 0:
+                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                    line += f" ({surprise:+.1f}%)"
+            lines.append(line)
+        lines.append("")
+    if upcoming:
+        lines.append("Upcoming:")
+        for b in upcoming:
+            when = b.report_date.isoformat() + (f" {b.hour}" if b.hour else "")
+            line = f"- {b.symbol} — {when}"
+            if b.eps_estimate is not None:
+                line += f" (est {b.eps_estimate:.2f})"
+            lines.append(line)
+        lines.append("")
+    lines.append("_Context only — single-source claims, never gated, never a delivery trigger._")
+    return lines
 
 
 def _quarantine_section(tickers: Sequence[TickerReport]) -> list[str]:
@@ -417,10 +555,13 @@ def _health_section(tickers: Sequence[TickerReport]) -> list[str]:
     for source in Source:
         tally = tallies.get(source)
         if tally is None:
-            if tallies:
+            if tallies and source is not Source.FRED:
                 # A source with zero rows on a run that fetched anything was
                 # never wired in (no API key / contact email) — permanent
                 # degradation belongs in the digest, not just a CLI echo.
+                # FRED is the exception: it is wired by macro.yaml, not a
+                # secret, and a run with no econ series has nothing to
+                # disclose (its failures still tally when configured).
                 lines.append(
                     f"- {source.value}: not configured — its cross-checks never ran"
                 )
@@ -473,6 +614,31 @@ def _event_line(event: ChangeEvent) -> str:
             return (
                 f"⚠ THESIS DRIFT — your line \"{check}\" is broken: "
                 f"{_label(field)} is now {shown} ({status})"
+            )
+        case MacroLineCrossed(
+            label=label, check=check, observed=observed, unit=unit, decimals=decimals, newly=newly
+        ):
+            status = "newly crossed" if newly else "still crossed"
+            return (
+                f'⚠ LINE CROSSED — "{check}": {label} is at '
+                f"{observed:.{decimals}f}{unit} ({status})"
+            )
+        case MacroPrint(
+            label=label, period=period, value=value, prev_value=prev_value,
+            delta=delta, unit=unit, decimals=decimals,
+        ):
+            line = f"New print — {label}: {value:.{decimals}f}{unit} (period {period.isoformat()})"
+            if prev_value is not None and delta is not None:
+                line += f", prior {prev_value:.{decimals}f}{unit} ({delta:+.{decimals}f})"
+            return line
+        case MacroShift(
+            label=label, old=old, new=new, delta=delta, unit=unit,
+            decimals=decimals, threshold=threshold, old_as_of=old_as_of,
+        ):
+            return (
+                f"{label} {old:.{decimals}f}{unit} → {new:.{decimals}f}{unit} "
+                f"({delta:+.{decimals}f}, alert ≥ {format(threshold, 'g')})"
+                f" vs {old_as_of.date().isoformat()}"
             )
         case PriceMove(old=old, new=new, pct=pct, threshold=threshold, old_as_of=old_as_of):
             return (

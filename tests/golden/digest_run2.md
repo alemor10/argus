@@ -2,6 +2,10 @@
 
 Status: PARTIAL — some tickers or sources failed this run; degradation is detailed under Data health.
 
+## Macro
+
+- VIX: 25.40 (Δ +10.40 vs 2026-07-06) (yahoo, 2026-07-13 14:00Z) — ⚠ line crossed: value >= 25
+
 ## Changes
 
 ### NTDOY
@@ -19,6 +23,11 @@ _Datacenter capex supercycle; CUDA moat._
 - Consensus rating buy → hold (down)
 - Analyst action (2026-07-12): Morgan Stanley down — Overweight → Equal-Weight
 - Earnings imminent: 2026-07-17 (in 4 days)
+
+### ^VIX
+
+- ⚠ LINE CROSSED — "value >= 25": VIX is at 25.40 (newly crossed)
+- VIX 15.00 → 25.40 (+10.40, alert ≥ 3) vs 2026-07-06
 
 Fetch failures (no data this run): DEADCO (yahoo: HTTP 502 from upstream; finnhub: HTTP 502 from upstream).
 
@@ -108,7 +117,7 @@ _Δ vs 2026-07-06_
 
 ## Data health
 
-- yahoo: 2 ok, 1 error (first: HTTP 502 from upstream)
+- yahoo: 3 ok, 1 error (first: HTTP 502 from upstream)
 - edgar: not configured — its cross-checks never ran
 - finnhub: 1 ok, 2 errors (first: HTTP 502 from upstream) — price cross-checks skipped (2 tickers)
 

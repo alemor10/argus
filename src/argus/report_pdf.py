@@ -204,7 +204,12 @@ def _detail_subjects(
             for p in report.scout
             if p.status == "proposed"
         ]
-    ordered = sorted(report.tickers, key=lambda t: t.context.ticker)
+    # Macro series get no detail page: a 21-field equity panel of dashes for
+    # ^VIX is junk, and each page costs two network fetches (history+revenue).
+    ordered = sorted(
+        (t for t in report.tickers if t.context.macro is None),
+        key=lambda t: t.context.ticker,
+    )
     return [(t.context.ticker, t, None) for t in ordered]
 
 
@@ -511,10 +516,11 @@ def _health_lines(report: RunReport) -> list[tuple[str, str]]:
     for source in Source:
         tally = tallies.get(source)
         if tally is None:
-            if tallies:
+            if tallies and source is not Source.FRED:
                 # Zero rows on a run that fetched anything = never wired in
                 # (no API key / contact email) — permanent degradation belongs
-                # in the report, not just a CLI echo.
+                # in the report, not just a CLI echo. FRED is wired by
+                # macro.yaml, not a secret — nothing to disclose when absent.
                 lines.append(
                     (f"{source.value}: not configured — its cross-checks never ran", _MUTED)
                 )
@@ -559,7 +565,12 @@ def _health_lines(report: RunReport) -> list[tuple[str, str]]:
 
 
 def _watch_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
-    tickers = sorted(report.tickers, key=lambda t: t.context.ticker)
+    # Macro series live in the markdown digest's Macro section, not the
+    # equity table (a PDF macro strip is a possible follow-up).
+    tickers = sorted(
+        (t for t in report.tickers if t.context.macro is None),
+        key=lambda t: t.context.ticker,
+    )
     cur.line("Watchlist", size=11, weight="bold")
     cur.gap(0.008)
     if not tickers:
@@ -1085,6 +1096,8 @@ def _metric_lines(ticker_report: TickerReport | None) -> list[tuple[str, str]]:
         error = ticker_report.error or "unknown error"
         lines.append((_clip(f"Fetch failed — no data this run ({error}).", 100), _CRITICAL))
     for field in Field:
+        if field is Field.ECON_VALUE:  # macro-only field — never on an equity panel
+            continue
         label = _FIELD_LABELS.get(field, field.value.replace("_", " "))
         prefix = f"{label:<26}"  # widest label: 'Revenue growth (MRQ YoY)' = 24
         fv = snapshot.values.get(field) if snapshot else None

@@ -11,9 +11,11 @@ import pytest
 from argus.fields import Field, QuarantineCode, Source
 from argus.models import (
     AnalystActionRecord,
+    BellwetherEarning,
     EarningsResultRecord,
     FieldQuarantined,
     GatedObservation,
+    MacroSpec,
     ParseFailure,
     PriceMove,
     QuarantineHit,
@@ -22,6 +24,7 @@ from argus.models import (
     Thresholds,
     TickerContext,
 )
+from argus.thesis import parse_thesis_check
 from argus.store import connect, migrate, queries, writer
 
 T0 = datetime(2026, 7, 6, 14, 0, tzinfo=UTC)  # a week-ago baseline run
@@ -72,10 +75,10 @@ def _begin(con, *, started_at=T1, kind="watch"):
 
 
 def _write(con, run_id, *, ticker="NVDA", gated=(), actions=(), earnings=(), health=(),
-           status="ok", error=None, thesis=None, thresholds=Thresholds()):
+           status="ok", error=None, thesis=None, thresholds=Thresholds(), macro=None):
     writer.write_ticker_result(
         con, run_id=run_id,
-        context=TickerContext(ticker=ticker, thesis=thesis, thresholds=thresholds),
+        context=TickerContext(ticker=ticker, thesis=thesis, thresholds=thresholds, macro=macro),
         gated=gated, actions=actions, earnings=earnings, source_health=health,
         status=status, error=error,
     )
@@ -389,6 +392,81 @@ def test_earnings_results_query_is_per_ticker(con):
     assert queries.new_earnings_results(con, r1, "NVDA") == [nvda]
     assert nvda.eps_estimate is None  # optional estimate round-trips as NULL → None
     assert queries.new_earnings_results(con, r1, "NTDOY") == []
+
+
+# --- macro + bellwethers --------------------------------------------------------
+
+
+def test_macro_spec_round_trips_through_run_report(con):
+    """The WHOLE spec is snapshotted per run (not a bare role flag) so
+    `report --run N` reproduces the Macro section after macro.yaml edits."""
+    spec = MacroSpec(
+        label="VIX",
+        unit="",
+        decimals=1,
+        alert_move=3.0,
+        sanity=(0.0, 200.0),
+        alert_when=(parse_thesis_check("price >= 25").model_copy(update={"raw": "value >= 25"}),),
+    )
+    run_id = _begin(con)
+    _write(
+        con, run_id, ticker="^VIX", macro=spec,
+        gated=[_accepted(Field.PRICE, ticker="^VIX", num=25.4, observed_at=T1)],
+    )
+    writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
+    report = queries.run_report(con, run_id)
+    [ticker] = report.tickers
+    assert ticker.context.macro == spec  # nested ThesisCheck and all
+    assert ticker.context.macro.alert_when[0].raw == "value >= 25"
+
+
+def test_watch_row_hydrates_with_macro_none(con):
+    run_id = _begin(con)
+    _write(con, run_id)
+    writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
+    [ticker] = queries.run_report(con, run_id).tickers
+    assert ticker.context.macro is None
+
+
+def test_observed_at_round_trips_into_field_values(con):
+    """MacroPrint keys on the period timestamp — it must survive hydration."""
+    period = datetime(2026, 6, 1, tzinfo=UTC)
+    run_id = _begin(con)
+    _write(
+        con, run_id, ticker="CPIAUCSL",
+        gated=[
+            _accepted(
+                Field.ECON_VALUE, ticker="CPIAUCSL", num=3.46,
+                source=Source.FRED, observed_at=period,
+            )
+        ],
+    )
+    snapshot = queries.snapshot(con, run_id, "CPIAUCSL")
+    assert snapshot.values[Field.ECON_VALUE].observed_at == period
+    fallback = queries.latest_accepted(con, "CPIAUCSL", Field.ECON_VALUE, run_id + 1)
+    assert fallback.observed_at == period
+
+
+def test_bellwether_earnings_round_trip(con):
+    run_id = _begin(con)
+    _write(con, run_id)
+    rows = [
+        BellwetherEarning(
+            symbol="NVDA", report_date=date(2026, 7, 15), hour="amc",
+            eps_estimate=1.05, eps_actual=None,
+        ),
+        BellwetherEarning(
+            symbol="MSFT", report_date=date(2026, 7, 14), hour="bmo",
+            eps_estimate=3.05, eps_actual=3.11, revenue_estimate=7.1e10, revenue_actual=7.3e10,
+        ),
+    ]
+    writer.write_bellwether_earnings(con, run_id=run_id, rows=rows)
+    writer.write_bellwether_earnings(con, run_id=run_id, rows=rows)  # idempotent re-entry
+    writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
+    report = queries.run_report(con, run_id)
+    assert [b.symbol for b in report.bellwethers] == ["MSFT", "NVDA"]  # date-then-symbol order
+    assert report.bellwethers[0].eps_actual == 3.11
+    assert report.bellwethers[1].eps_actual is None
 
 
 # --- events + run_report ------------------------------------------------------

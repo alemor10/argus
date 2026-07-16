@@ -55,6 +55,16 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       line third parties drew — never an Argus forecast. Event-shaped like
       analyst actions (first-seen set membership; first-run history is baseline,
       not news). See ARCHITECTURE.md, Change detection.
+- [x] Macro watch + daily pulse (v1.7, 2026-07-15): `macro.yaml` series —
+      market quotes (Yahoo: 10Y/3M yields, VIX, S&P) and economic releases
+      (FRED, keyless: CPI/core-PCE YoY, unemployment, payrolls MoM, Fed funds)
+      — levels + Δ in every watch digest, with human-drawn alert lines
+      ("value >= 25"), absolute-move thresholds, and release-day prints as
+      events. Daily cadence via `argus watch --deliver events-only`: file
+      digest always written, Discord/email only when a run carries NEW
+      information (the alarm-fatigue guard). Bellwether megacap earnings
+      calendar as a claims-labeled context section (one Finnhub call). See
+      ARCHITECTURE.md, Macro watch + daily pulse.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 
@@ -80,7 +90,8 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 |---|---|---|
 | Price, valuation, earnings dates, analyst data | Yahoo via `yfinance` | Free; covered ALL spike tickers incl. OTC ADRs (NTDOY/TCEHY/NSRGY), BRK-B, ETFs. `upgrades_downgrades` gives dated rating-change history. Unofficial API — expect breakage, design the fetch layer behind an adapter interface. |
 | Fundamentals cross-check (US filers) | SEC EDGAR `companyfacts` | Free, official. Covers 20-F foreign filers (ASML) too. Symbology uses dashes (`BRK-B`). Needs a `User-Agent` header with contact email. NOT available for OTC ADRs or ETFs. |
-| Price cross-check | Finnhub free tier | 60 req/min with free API key; ample at watchlist scale. (Stooq is dead/blocked — do not use.) |
+| Price cross-check | Finnhub free tier | 60 req/min with free API key; ample at watchlist scale. Its `/calendar/earnings` also feeds the bellwether context section (one call, claims-labeled). (Stooq is dead/blocked — do not use.) |
+| Macro economic series (CPI, jobs, rates) | FRED via keyless `fredgraph.csv` (verified 2026-07-15) | Unofficial-but-free chart endpoint, accepted eyes-open behind `sources/fred.py`; the keyed official API (free registration) is the upgrade path. Yahoo carries the market-quote macro series (^TNX/^IRX/^VIX/^GSPC…) through the existing adapter. |
 | ETF full holdings (look-through) | SEC N-PORT filings | Free, monthly, all holdings with CUSIPs (VOO = 519 entries verified). Pain is trust→series→ticker mapping + CUSIP→ticker join (OpenFIGI free API). |
 | Bulk fundamentals (discovery) | **TradingView scanner (free, unofficial) — decided 2026-07-13** | Screening a universe from Yahoo is rate-limit-abusive and fragile — don't. Scout ships on the TV scanner behind a `Screener` protocol; paid options below remain the upgrade path (July 2026 prices): |
 

@@ -15,6 +15,10 @@ sources covering the pathology matrix:
     beside the quarantine headline.
   - DEADCO: fine in run 1, every source dies in run 2 → ticker failed, run
     goes 'partial', digest still written.
+  - ^VIX (macro): 15.0 → 25.4 between runs → MacroShift (+10.40 over the 3.0
+    alert_move) AND a newly-crossed "value >= 25" line; NO PriceMove despite
+    the 69% move (the equity machinery is off for macro contexts); renders
+    in the Macro section, never the Watchlist.
 
 Run 2's digest is byte-compared against tests/golden/digest_run2.md
 (regenerate deliberately with `uv run pytest --update-golden`).
@@ -31,17 +35,21 @@ from argus.gates import DEFAULT_PROFILE
 from argus.models import (
     AnalystActionRecord,
     EarningsResultRecord,
+    MacroSpec,
     RawObservation,
     Thresholds,
     TickerContext,
 )
 from argus.sources.base import FetchResult, SourceError
 from argus.store import connect, migrate
+from argus.thesis import parse_thesis_check
 
 GOLDEN = Path(__file__).parent / "golden" / "digest_run2.md"
 
 RUN1_AT = datetime(2026, 7, 6, 14, 0, tzinfo=UTC)
 RUN2_AT = datetime(2026, 7, 13, 14, 0, tzinfo=UTC)
+
+_VIX_LINE = parse_thesis_check("price >= 25").model_copy(update={"raw": "value >= 25"})
 
 CONTEXTS = [
     TickerContext(
@@ -58,6 +66,10 @@ CONTEXTS = [
         ticker="NVDA",
         thesis="Datacenter capex supercycle; CUDA moat.",
         thresholds=Thresholds(),  # default 5% price threshold; move is 6.6%
+    ),
+    TickerContext(
+        ticker="^VIX",
+        macro=MacroSpec(label="VIX", alert_move=3.0, alert_when=(_VIX_LINE,)),
     ),
 ]
 
@@ -147,6 +159,7 @@ def _sources_run1():
                 )
             ],
         },
+        "^VIX": {"observations": [_obs("^VIX", Field.PRICE, num=15.0)]},
     }
     finnhub = {
         "DEADCO": {"observations": [_obs("DEADCO", Field.PRICE, num=50.05, source=Source.FINNHUB)]},
@@ -226,6 +239,9 @@ def _sources_run2():
                 )
             ],
         },
+        # 15.0 → 25.4: MacroShift (+10.40 ≥ 3.0) AND the "value >= 25" line
+        # newly crossed — but NO PriceMove, despite +69%.
+        "^VIX": {"observations": [_obs("^VIX", Field.PRICE, num=25.4)]},
     }
     finnhub = {
         "DEADCO": SourceError("HTTP 502 from upstream"),
@@ -321,6 +337,9 @@ def test_golden_run_events_in_store(con):
     # NVDA's quarter was first seen on run 1 (baseline): the run-2 re-serve
     # must not fire — a stale quarter re-reported weekly would be noise.
     assert "earnings_reported" not in by_ticker["NVDA"]
+    # The macro series alerts by ITS rules (line + shift), never the equity
+    # machinery — +69% on VIX is not a PriceMove.
+    assert by_ticker["^VIX"] == ["macro_line_crossed", "macro_shift"]
 
     # the quarantined target is in the store with its reason, price untouched
     quarantined = con.execute(

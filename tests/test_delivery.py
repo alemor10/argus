@@ -247,3 +247,121 @@ def test_engine_discloses_delivery_failure_instead_of_crashing(tmp_path):
     assert outcome.delivery_error is not None
     assert "mail server down" in outcome.delivery_error
     assert outcome.digest_path is not None and outcome.digest_path.exists()
+
+
+# --- event-gated delivery (--deliver events-only) -----------------------------
+
+
+class _CaptureSink:
+    """Records every delivered digest; returns no path (channel-style sink)."""
+
+    def __init__(self):
+        self.writes: list[str] = []
+
+    def write(self, markdown, *, run_id, as_of, attachments=()):
+        self.writes.append(markdown)
+        return None
+
+
+class _PriceSource:
+    """Serves one price for every ticker — two runs with different prices
+    make a threshold-crossing PriceMove."""
+
+    def __init__(self, price: float, fetched_at: datetime):
+        from argus.fields import Source
+
+        self.source_id = Source.YAHOO
+        self._price = price
+        self._fetched_at = fetched_at
+
+    def covers(self, ticker: str) -> bool:
+        return True
+
+    def fetch(self, ticker: str):
+        from argus.fields import Field, Source
+        from argus.models import RawObservation
+        from argus.sources.base import FetchResult
+
+        return FetchResult(
+            observations=(
+                RawObservation(
+                    ticker=ticker,
+                    field=Field.PRICE,
+                    value_num=self._price,
+                    source=Source.YAHOO,
+                    fetched_at=self._fetched_at,
+                ),
+            )
+        )
+
+
+class TestEventGatedDelivery:
+    RUN1_AT = datetime(2026, 7, 13, 14, 0, tzinfo=UTC)
+    RUN2_AT = datetime(2026, 7, 14, 14, 0, tzinfo=UTC)
+
+    def _run(self, store, gated, *, price, as_of, contexts):
+        con, reports_dir = store
+        return engine.run(
+            contexts,
+            con=con,
+            sources=[_PriceSource(price, as_of)],
+            profile=DEFAULT_PROFILE,
+            sink=FileDigestSink(reports_dir),
+            gated_sink=gated,
+            as_of=as_of,
+            today=as_of.date(),
+            app_version="gate-test",
+        )
+
+    @pytest.fixture()
+    def store(self, tmp_path):
+        from argus.store import connect, migrate
+
+        con = connect(tmp_path / "argus.db")
+        migrate(con)
+        yield con, tmp_path / "reports"
+        con.close()
+
+    def test_quiet_run_skips_the_gated_sink_and_discloses_it(self, store):
+        from argus.models import TickerContext
+
+        gated = _CaptureSink()
+        contexts = [TickerContext(ticker="NVDA")]
+        outcome = self._run(store, gated, price=100.0, as_of=self.RUN1_AT, contexts=contexts)
+        # First run: baseline established, zero events → channels stay quiet,
+        # the file digest still lands, and the skip is stated IN the digest.
+        assert outcome.status == "complete"
+        assert outcome.delivery_error is None
+        assert gated.writes == []
+        assert outcome.digest_path is not None
+        digest = outcome.digest_path.read_text(encoding="utf-8")
+        assert "delivery skipped: no new events (events-only)" in digest
+
+    def test_eventful_run_delivers_through_the_gated_sink(self, store):
+        from argus.models import TickerContext
+
+        gated = _CaptureSink()
+        contexts = [TickerContext(ticker="NVDA")]
+        self._run(store, gated, price=100.0, as_of=self.RUN1_AT, contexts=contexts)
+        outcome = self._run(store, gated, price=110.0, as_of=self.RUN2_AT, contexts=contexts)
+        assert len(gated.writes) == 1  # run 2 only: the +10% move is news
+        assert "Price 100.00 → 110.00" in gated.writes[0]
+        assert "delivery skipped" not in gated.writes[0]
+        assert outcome.delivery_error is None
+
+    def test_gated_sink_failure_is_disclosed_not_swallowed(self, store):
+        from argus.models import TickerContext
+
+        contexts = [TickerContext(ticker="NVDA")]
+        self._run(store, _CaptureSink(), price=100.0, as_of=self.RUN1_AT, contexts=contexts)
+        outcome = self._run(
+            store,
+            CompositeSink(_BoomSink()),
+            price=110.0,
+            as_of=self.RUN2_AT,
+            contexts=contexts,
+        )
+        # The file copy landed; the channel failure is loud in the outcome.
+        assert outcome.digest_path is not None and outcome.digest_path.exists()
+        assert outcome.delivery_error is not None
+        assert "mail server down" in outcome.delivery_error

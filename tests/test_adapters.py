@@ -19,7 +19,7 @@ from pathlib import Path
 import pytest
 
 from argus.fields import Field, Source
-from argus.sources import EdgarSource, FinnhubSource, YahooSource
+from argus.sources import EdgarSource, FinnhubSource, FredSource, YahooSource
 
 FIXTURES = Path(__file__).parent / "fixtures"
 FETCHED_AT = datetime(2026, 7, 13, 14, 0, tzinfo=UTC)
@@ -408,6 +408,138 @@ class TestEdgarParse:
         assert result.observations == ()
 
 
+class TestFinnhubEarningsCalendar:
+    def test_live_fixture_parses_to_claims_rows(self):
+        from argus.sources.finnhub import parse_earnings_calendar
+
+        rows = parse_earnings_calendar(load("finnhub/earnings-calendar-2026-07-15.json"))
+        assert len(rows) == 6
+        acu = next(r for r in rows if r.symbol == "ACU")
+        assert acu.report_date == date(2026, 7, 17)
+        assert acu.eps_estimate == pytest.approx(0.5858)
+        assert acu.eps_actual is None  # not yet reported → renders as upcoming
+        alv = next(r for r in rows if r.symbol == "ALV")
+        assert alv.hour == "bmo"
+
+    def test_malformed_rows_are_skipped_numbers_cleaned(self):
+        from argus.sources.finnhub import parse_earnings_calendar
+
+        payload = {
+            "earningsCalendar": [
+                {"symbol": "OK", "date": "2026-07-16", "hour": "amc",
+                 "epsEstimate": 1.0, "epsActual": True},  # bool laundering guard
+                {"symbol": "", "date": "2026-07-16"},  # no identity
+                {"symbol": "BAD", "date": "not-a-date"},
+                "not a dict",
+            ]
+        }
+        [row] = parse_earnings_calendar(payload)
+        assert row.symbol == "OK"
+        assert row.eps_actual is None
+
+    @pytest.mark.parametrize("junk", GARBAGE_PAYLOADS[:4])
+    def test_parse_never_raises_on_garbage(self, junk):
+        from argus.sources.finnhub import parse_earnings_calendar
+
+        assert parse_earnings_calendar(junk) == []
+
+
+# --- FRED --------------------------------------------------------------------
+
+
+class TestFredParse:
+    @pytest.fixture()
+    def cpi_csv(self):
+        return (FIXTURES / "fred" / "CPIAUCSL-2026-07-15.csv").read_text()
+
+    def test_level_takes_the_latest_point_with_its_period(self, cpi_csv):
+        source = FredSource({"CPIAUCSL": "level"})
+        [obs] = source.parse(cpi_csv, "CPIAUCSL", FETCHED_AT).observations
+        assert obs.field is Field.ECON_VALUE
+        assert obs.value_num == pytest.approx(332.568)
+        assert obs.observed_at == datetime(2026, 6, 1, tzinfo=UTC)  # the period, not fetch time
+        assert obs.source is Source.FRED
+        assert obs.fetched_at == FETCHED_AT
+
+    def test_yoy_pct_computes_from_the_published_series(self, cpi_csv):
+        """June 2026 (332.568) over June 2025 (321.435) → +3.46% — derived
+        from two points of the same official series (EDGAR-ratio precedent)."""
+        source = FredSource({"CPIAUCSL": "yoy_pct"})
+        [obs] = source.parse(cpi_csv, "CPIAUCSL", FETCHED_AT).observations
+        assert obs.value_num == pytest.approx(3.4635, abs=0.01)
+        assert obs.observed_at == datetime(2026, 6, 1, tzinfo=UTC)
+
+    def test_mom_change_is_latest_minus_previous(self, cpi_csv):
+        source = FredSource({"CPIAUCSL": "mom_change"})
+        [obs] = source.parse(cpi_csv, "CPIAUCSL", FETCHED_AT).observations
+        assert obs.value_num == pytest.approx(332.568 - 333.979)
+
+    def test_missing_observations_are_absences_not_failures(self):
+        """FRED encodes a missing period as "." — and, observed LIVE on
+        CPIAUCSL (2025-10-01), as an empty cell. Both are absences; treating
+        the empty cell as unreadable would quarantine the same artifact on
+        every run forever."""
+        payload = (
+            "observation_date,DFF\n"
+            "2026-07-11,.\n"
+            "2026-07-12,\n"  # the live empty-cell variant
+            "2026-07-13,3.62\n"
+            "2026-07-14,3.63\n"
+        )
+        result = FredSource({"DFF": "level"}).parse(payload, "DFF", FETCHED_AT)
+        [obs] = result.observations
+        assert obs.value_num == pytest.approx(3.63)
+        assert result.parse_failures == ()
+
+    def test_unreadable_rows_aggregate_into_one_failure(self):
+        payload = (
+            "observation_date,UNRATE\n"
+            "2026-05-01,4.3\n"
+            "garbled row without a comma\n"
+            "2026-06-01,not-a-number\n"
+            "2026-06-01,4.2\n"
+        )
+        result = FredSource({"UNRATE": "level"}).parse(payload, "UNRATE", FETCHED_AT)
+        [obs] = result.observations  # the good rows still land
+        assert obs.value_num == pytest.approx(4.2)
+        [failure] = result.parse_failures
+        assert failure.field is Field.ECON_VALUE
+        assert "2 unreadable CSV row(s)" in failure.raw
+
+    def test_series_too_short_for_its_transform_is_absent(self):
+        payload = "observation_date,NEW\n2026-06-01,100.0\n"
+        for transform in ("yoy_pct", "mom_change"):
+            result = FredSource({"NEW": transform}).parse(payload, "NEW", FETCHED_AT)
+            assert result.observations == ()
+            assert result.parse_failures == ()  # absence, not unreadable data
+
+    def test_yoy_needs_a_point_near_one_year_back(self):
+        """A gap where last-year should be → absent, never a wrong-base pct."""
+        payload = (
+            "observation_date,GAPPY\n"
+            "2024-06-01,90.0\n"  # two years back — outside the tolerance
+            "2026-06-01,110.0\n"
+        )
+        result = FredSource({"GAPPY": "yoy_pct"}).parse(payload, "GAPPY", FETCHED_AT)
+        assert result.observations == ()
+
+    def test_zero_base_yoy_is_absent_not_infinite(self):
+        payload = "observation_date,Z\n2025-06-01,0.0\n2026-06-01,5.0\n"
+        assert FredSource({"Z": "yoy_pct"}).parse(payload, "Z", FETCHED_AT).observations == ()
+
+    def test_covers_only_configured_series(self):
+        source = FredSource({"CPIAUCSL": "yoy_pct"})
+        assert source.covers("CPIAUCSL")
+        assert not source.covers("UNRATE")
+        assert not source.covers("NVDA")  # never consulted for equities
+
+    @pytest.mark.parametrize("junk", (*GARBAGE_PAYLOADS[:4], "not,a\nreal csv"))
+    def test_parse_never_raises_on_garbage(self, junk):
+        result = FredSource({"X": "level"}).parse(junk, "X", FETCHED_AT)
+        assert result.observations == ()
+        assert len(result.parse_failures) == 1  # the whole payload is evidence
+
+
 # --- Live smoke (excluded by default via pytest addopts) ---------------------
 
 
@@ -434,3 +566,10 @@ class TestLiveSmoke:
         assert not source.covers("NTDOY")  # OTC ADR: must be not-applicable
         result = source.fetch("AAPL")
         assert result.observations  # margins and/or debt-to-equity
+
+    def test_fred_live(self):
+        result = FredSource({"UNRATE": "level"}).fetch("UNRATE")
+        [obs] = result.observations
+        assert obs.field is Field.ECON_VALUE
+        assert 0 < obs.value_num < 30  # an unemployment rate, not an index level
+        assert obs.observed_at is not None

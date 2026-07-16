@@ -23,6 +23,7 @@ from typing import Literal
 
 from argus.models import (
     AnalystActionRecord,
+    BellwetherEarning,
     ChangeEvent,
     CompanyProfile,
     EarningsResultRecord,
@@ -167,8 +168,8 @@ def write_ticker_result(
             )
         con.execute(
             "INSERT INTO run_tickers "
-            "(run_id, ticker, status, error, thesis, thresholds, thesis_checks) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(run_id, ticker, status, error, thesis, thresholds, thesis_checks, macro) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 context.ticker,
@@ -177,6 +178,7 @@ def write_ticker_result(
                 context.thesis,
                 context.thresholds.model_dump_json(),
                 json.dumps([c.model_dump(mode="json") for c in context.thesis_checks]),
+                context.macro.model_dump_json() if context.macro is not None else None,
             ),
         )
         if company_profile is not None:
@@ -241,6 +243,32 @@ def write_scout_candidates(
                     json.dumps(record.screen_reasons),
                     json.dumps(record.screener_metrics),
                     json.dumps(record.peer_context) if record.peer_context is not None else None,
+                ),
+            )
+
+
+def write_bellwether_earnings(
+    con: sqlite3.Connection, *, run_id: int, rows: Sequence[BellwetherEarning]
+) -> None:
+    """Persist this run's bellwether calendar window (claims-labeled context)
+    so the digest section reproduces from SQL. One transaction; OR IGNORE
+    keeps re-entry idempotent."""
+    with con:
+        for r in rows:
+            con.execute(
+                """INSERT OR IGNORE INTO bellwether_earnings
+                     (run_id, symbol, report_date, hour, eps_estimate, eps_actual,
+                      revenue_estimate, revenue_actual)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    run_id,
+                    r.symbol,
+                    r.report_date.isoformat(),
+                    r.hour,
+                    r.eps_estimate,
+                    r.eps_actual,
+                    r.revenue_estimate,
+                    r.revenue_actual,
                 ),
             )
 

@@ -124,6 +124,23 @@ def test_migrate_v5_adds_earnings_results(tmp_path):
     con.close()
 
 
+def test_migrate_v6_adds_macro_column_and_bellwethers(tmp_path):
+    """v1.7: run_tickers gains the MacroSpec snapshot column and the
+    bellwether context table appears — one callable step, idempotent."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    con.execute("ALTER TABLE run_tickers DROP COLUMN macro")  # v6-shaped
+    con.execute("DROP TABLE bellwether_earnings")
+    con.execute("PRAGMA user_version = 6")
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    columns = {row[1] for row in con.execute("PRAGMA table_info(run_tickers)")}
+    assert "macro" in columns
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "bellwether_earnings" in tables
+    con.close()
+
+
 def test_earnings_results_dedup_on_natural_key(con):
     insert = """INSERT OR IGNORE INTO earnings_results
         (ticker, quarter_end, eps_actual, eps_estimate, source, fetched_at, first_seen_run_id)

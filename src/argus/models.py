@@ -135,6 +135,7 @@ class FieldValue(BaseModel):
     value: float | str | date
     source: Source
     fetched_at: AwareDatetime
+    observed_at: AwareDatetime | None = None  # source-reported data timestamp, when available
     corroborated_by: tuple[Source, ...] = ()
 
     @model_validator(mode="before")
@@ -217,11 +218,55 @@ class ThesisCheckResult(BaseModel):
     observed: float | str | None = None
 
 
+class MacroSpec(BaseModel):
+    """How one macro series is watched and rendered. Persisted WHOLE in
+    run_tickers.macro (JSON) so `argus report --run N` reproduces the Macro
+    section bit-for-bit even after macro.yaml changes — the presence of a
+    MacroSpec on a TickerContext IS the macro role.
+
+    `alert_when` lines are alert-WHEN-TRUE ("value >= 25" pages when VIX is
+    at or above 25) — the OPPOSITE sense of thesis checks, which breach when
+    a condition STOPS holding; changes.py inverts locally and deliberately.
+    `sanity` is a render-time plausibility band (a human-drawn "check units"
+    line — e.g. a silent ×10 regime change in a yield quote), never a gate.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    label: str = PydanticField(min_length=1)
+    unit: str = ""  # rendered suffix: "%", "k", ""
+    decimals: int = PydanticField(default=2, ge=0, le=6)
+    source: Source = Source.YAHOO  # the ONE source fetched for this series
+    transform: Literal["level", "yoy_pct", "mom_change"] = "level"  # FRED-side derivation
+    alert_move: float | None = PydanticField(default=None, gt=0, allow_inf_nan=False)
+    alert_on_release: bool = False  # econ prints: a new period IS the alert
+    sanity: tuple[float, float] | None = None
+    alert_when: tuple[ThesisCheck, ...] = ()
+
+    @model_validator(mode="after")
+    def _consistent(self) -> "MacroSpec":
+        if self.source not in (Source.YAHOO, Source.FRED):
+            raise ValueError(f"macro series can only come from yahoo or fred, not {self.source}")
+        if self.sanity is not None and not self.sanity[0] < self.sanity[1]:
+            raise ValueError(f"sanity bounds must be [low, high], got {list(self.sanity)}")
+        if self.transform != "level" and self.source is not Source.FRED:
+            raise ValueError("transforms only apply to fred series")
+        return self
+
+    @property
+    def value_field(self) -> Field:
+        """Where this series' number lives: market quotes are PRICE, econ
+        prints are ECON_VALUE."""
+        return Field.ECON_VALUE if self.source is Source.FRED else Field.PRICE
+
+
 class TickerContext(BaseModel):
     """What the engine operates on — NOT "a watchlist entry".
 
     `watch` builds these from watchlist.yaml; `scout` will build them from a
     screener feed and reuse the identical enrich → gate → persist pipeline.
+    A context carrying a MacroSpec is a macro series: fetched from its one
+    source, diffed by the macro rules, rendered in the Macro section.
     """
 
     model_config = ConfigDict(frozen=True)
@@ -230,6 +275,7 @@ class TickerContext(BaseModel):
     thesis: str | None = None
     thresholds: Thresholds = Thresholds()
     thesis_checks: tuple[ThesisCheck, ...] = ()
+    macro: MacroSpec | None = None
 
 
 class AnalystActionRecord(BaseModel):
@@ -361,9 +407,17 @@ class EarningsReported(_Event):
 
 
 class EarningsImminent(_Event):
+    """State event: re-fires every run inside the window (suppression's
+    failure mode is silence). `newly` is False only when the SAME date was
+    already inside the window at the baseline run — so event-gated daily
+    delivery reminds once, not seven mornings straight, while the weekly
+    full digest still shows the standing reminder. Default True keeps old
+    persisted payloads round-tripping."""
+
     kind: Literal["earnings_imminent"] = "earnings_imminent"
     earnings_date: date
     days_until: int
+    newly: bool = True
 
 
 class FieldQuarantined(_Event):
@@ -392,8 +446,59 @@ class ThesisDrift(_Event):
     newly: bool = True
 
 
+class MacroLineCrossed(_Event):
+    """A human-drawn alert-when-true line on a macro series is currently TRUE
+    ("value >= 25" with VIX at 25.4). Fires every run while crossed —
+    suppression's failure mode is silence; `newly` is False when it was
+    already crossed at baseline, so event-gated delivery reminds once.
+    Carries label/unit/decimals so the payload self-renders (the
+    PriceMove-freezes-threshold precedent)."""
+
+    kind: Literal["macro_line_crossed"] = "macro_line_crossed"
+    label: str
+    check: str  # the raw line, rendered verbatim
+    observed: float
+    unit: str = ""
+    decimals: int = 2
+    newly: bool = True
+
+
+class MacroPrint(_Event):
+    """A NEW period landed for an economic series — release day is the news
+    (CPI day, jobs Friday). prev_value/delta compare against the prior
+    accepted print when one exists."""
+
+    kind: Literal["macro_print"] = "macro_print"
+    label: str
+    period: date  # the new print's period (the series' observed_at date)
+    value: float
+    prev_value: float | None = None
+    delta: float | None = None
+    unit: str = ""
+    decimals: int = 2
+
+
+class MacroShift(_Event):
+    """A macro series moved at least `alert_move` in its OWN units since the
+    last accepted baseline — absolute, never percent (a 15bp yield move is
+    the unit of interest, not "+3.3%")."""
+
+    kind: Literal["macro_shift"] = "macro_shift"
+    label: str
+    old: float
+    new: float
+    delta: float
+    unit: str = ""
+    decimals: int = 2
+    threshold: float
+    old_as_of: AwareDatetime
+
+
 ChangeEvent = Annotated[
     ThesisDrift
+    | MacroLineCrossed
+    | MacroPrint
+    | MacroShift
     | PriceMove
     | TargetMove
     | ConsensusShift
@@ -480,6 +585,22 @@ class ScoutProposal(ScoutCandidateRecord):
     streak: int = 0
 
 
+class BellwetherEarning(BaseModel):
+    """One megacap earnings-calendar row — CLAIMS-labeled context from a
+    single unofficial source (Finnhub), never gated, never an observation.
+    Persisted per run only so `report --run N` reproduces the section."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    report_date: date
+    hour: str = ""  # bmo | amc | "" as reported
+    eps_estimate: float | None = None
+    eps_actual: float | None = None
+    revenue_estimate: float | None = None
+    revenue_actual: float | None = None
+
+
 class ScorecardMark(BaseModel):
     """One name's realized standing as of a scoring run — total return since
     scout first proposed it, vs SPY over the same window. Immutable once
@@ -536,3 +657,4 @@ class RunReport(BaseModel):
     tickers: tuple[TickerReport, ...] = ()
     scout: tuple[ScoutProposal, ...] = ()  # populated for kind='scout' only
     scorecard: Scorecard | None = None  # scout self-scoring, when there is history
+    bellwethers: tuple[BellwetherEarning, ...] = ()  # watch-run market context (claims)

@@ -1,0 +1,70 @@
+{
+ "earningsCalendar": [
+  {
+   "symbol": "ACU",
+   "date": "2026-07-17",
+   "hour": "",
+   "quarter": 2,
+   "year": 2026,
+   "epsEstimate": 0.5858,
+   "epsActual": null,
+   "revenueEstimate": 56800380,
+   "revenueActual": null
+  },
+  {
+   "symbol": "ALV",
+   "date": "2026-07-17",
+   "hour": "bmo",
+   "quarter": 2,
+   "year": 2026,
+   "epsEstimate": 2.4466,
+   "epsActual": null,
+   "revenueEstimate": 2798163680,
+   "revenueActual": null
+  },
+  {
+   "symbol": "BALY",
+   "date": "2026-07-17",
+   "hour": "amc",
+   "quarter": 2,
+   "year": 2026,
+   "epsEstimate": -1.3518,
+   "epsActual": null,
+   "revenueEstimate": 803388108,
+   "revenueActual": null
+  },
+  {
+   "symbol": "BOTJ",
+   "date": "2026-07-17",
+   "hour": "",
+   "quarter": 2,
+   "year": 2026,
+   "epsEstimate": null,
+   "epsActual": null,
+   "revenueEstimate": null,
+   "revenueActual": null
+  },
+  {
+   "symbol": "BTM",
+   "date": "2026-07-17",
+   "hour": "",
+   "quarter": 1,
+   "year": 2026,
+   "epsEstimate": -0.5555,
+   "epsActual": null,
+   "revenueEstimate": 101656500,
+   "revenueActual": null
+  },
+  {
+   "symbol": "CCBC",
+   "date": "2026-07-17",
+   "hour": "",
+   "quarter": 2,
+   "year": 2026,
+   "epsEstimate": null,
+   "epsActual": null,
+   "revenueEstimate": null,
+   "revenueActual": null
+  }
+ ]
+}
