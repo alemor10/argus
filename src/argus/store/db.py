@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -109,6 +109,11 @@ CREATE TABLE IF NOT EXISTS market_wire (
     payload TEXT    NOT NULL
 ) WITHOUT ROWID;
 """,
+    # v1.11: the Radar's consider tier — run_tickers carries each name's tier
+    # at run time (watch | consider). Guarded ADD COLUMN, idempotent.
+    8: lambda con: _add_column_if_absent(
+        con, "run_tickers", "tier", "TEXT NOT NULL DEFAULT 'watch'"
+    ),
 }
 
 

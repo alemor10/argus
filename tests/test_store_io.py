@@ -75,10 +75,12 @@ def _begin(con, *, started_at=T1, kind="watch"):
 
 
 def _write(con, run_id, *, ticker="NVDA", gated=(), actions=(), earnings=(), health=(),
-           status="ok", error=None, thesis=None, thresholds=Thresholds(), macro=None):
+           status="ok", error=None, thesis=None, thresholds=Thresholds(), macro=None,
+           tier="watch"):
     writer.write_ticker_result(
         con, run_id=run_id,
-        context=TickerContext(ticker=ticker, thesis=thesis, thresholds=thresholds, macro=macro),
+        context=TickerContext(ticker=ticker, thesis=thesis, thresholds=thresholds, macro=macro,
+                              tier=tier),
         gated=gated, actions=actions, earnings=earnings, source_health=health,
         status=status, error=error,
     )
@@ -491,6 +493,37 @@ def test_quiet_pulse_has_no_market_wire(con):
     _write(con, run_id)
     writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
     assert queries.run_report(con, run_id).market is None
+
+
+def test_radar_hydrates_latest_scout_shortlist(con):
+    from argus.models import ScoutCandidateRecord
+
+    scout_run = _begin(con, kind="scout", started_at=T0)
+    writer.finish_run(con, run_id=scout_run, status="complete", finished_at=T0)
+    writer.write_scout_candidates(
+        con, run_id=scout_run,
+        records=[
+            ScoutCandidateRecord(ticker="NVDA", rank=3, status="proposed",
+                                 screen_reasons={}, screener_metrics={}),
+            ScoutCandidateRecord(ticker="BAD", rank=9, status="excluded",
+                                 exclusion_reason="quarantined",
+                                 screen_reasons={}, screener_metrics={}),
+        ],
+    )
+    watch_run = _begin(con, started_at=T1)
+    _write(con, watch_run)
+    writer.finish_run(con, run_id=watch_run, status="complete", finished_at=T1)
+    report = queries.run_report(con, watch_run)
+    assert [p.ticker for p in report.radar] == ["NVDA"]  # proposed only
+    assert report.tickers[0].context.tier == "watch"
+
+
+def test_consider_tier_round_trips(con):
+    run_id = _begin(con)
+    _write(con, run_id, ticker="ONON", tier="consider")
+    writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
+    [ticker] = queries.run_report(con, run_id).tickers
+    assert ticker.context.tier == "consider"
 
 
 # --- events + run_report ------------------------------------------------------

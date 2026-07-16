@@ -316,7 +316,7 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
     tickers = tuple(
         _ticker_report(con, run_id, row)
         for row in con.execute(
-            """SELECT ticker, status, error, thesis, thresholds, thesis_checks, macro
+            """SELECT ticker, status, error, thesis, thresholds, thesis_checks, macro, tier
                FROM run_tickers WHERE run_id = ? ORDER BY ticker""",
             (run_id,),
         )
@@ -336,7 +336,23 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
         ),
         bellwethers=_bellwether_earnings(con, run_id) if run["kind"] == "watch" else (),
         market=_market_wire(con, run_id) if run["kind"] == "watch" else None,
+        radar=_radar_shortlist(con, run_id) if run["kind"] == "watch" else (),
     )
+
+
+def _radar_shortlist(con: sqlite3.Connection, before_run: int) -> tuple[ScoutProposal, ...]:
+    """The Radar strip: the latest evaluated scout shortlist as of this run —
+    proposed names only, streaks intact. Deterministic from SQL, so the
+    issue reproduces."""
+    row = con.execute(
+        """SELECT MAX(r.run_id) AS run_id FROM runs r
+           WHERE r.kind = 'scout' AND r.run_id <= ? AND r.status != 'running'
+             AND EXISTS (SELECT 1 FROM scout_candidates sc WHERE sc.run_id = r.run_id)""",
+        (before_run,),
+    ).fetchone()
+    if row["run_id"] is None:
+        return ()
+    return tuple(p for p in _scout_proposals(con, row["run_id"]) if p.status == "proposed")
 
 
 def _market_wire(con: sqlite3.Connection, run_id: int) -> MarketWire | None:
@@ -401,6 +417,7 @@ def _ticker_report(con: sqlite3.Connection, run_id: int, rt: sqlite3.Row) -> Tic
                 ThesisCheck.model_validate(c) for c in json.loads(rt["thesis_checks"])
             ),
             macro=MacroSpec.model_validate_json(rt["macro"]) if rt["macro"] else None,
+            tier=rt["tier"] or "watch",
         ),
         status=rt["status"],
         snapshot=snapshot(con, run_id, ticker),

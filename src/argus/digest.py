@@ -104,6 +104,9 @@ def render(report: RunReport) -> str:
             parts.append(_macro_section(macro))
         # Changes reads equities first, then macro — both alphabetical.
         parts.append(_changes_section(watch + macro))
+        considering = [t for t in watch if t.context.tier == "consider"]
+        if report.radar or considering:
+            parts.append(_radar_section(report, considering))
         if report.market is not None:  # the issue's market pages (magazine mode)
             parts += [
                 _movers_section(report.market),
@@ -383,7 +386,12 @@ def _macro_delta(ticker: TickerReport, fv: FieldValue) -> str:
     delta = round(fv.value - old.value, spec.decimals)
     if delta == 0:
         return ""
-    window = "prior print" if spec.source == Source.FRED else baseline.as_of.date().isoformat()
+    if spec.source == Source.FRED:
+        window = "prior print"
+    elif baseline.as_of.date() == ticker.snapshot.as_of.date():
+        window = "earlier today"  # a manual same-day rerun; dates would read absurd
+    else:
+        window = baseline.as_of.date().isoformat()
     return f"Δ {delta:+.{spec.decimals}f} vs {window}"
 
 
@@ -446,6 +454,8 @@ def _watchlist_section(tickers: Sequence[TickerReport]) -> list[str]:
     lines = ["## Watchlist", ""]
     for ticker in tickers:
         lines += [f"### {ticker.context.ticker}", ""]
+        if ticker.context.tier == "consider":
+            lines += ["_Considering — promote with a thesis to graduate._", ""]
         if ticker.baseline is not None and ticker.snapshot is not None and ticker.snapshot.values:
             # Names the drift window once per ticker (baselines are
             # per-ticker, so it can differ across tickers after failures).
@@ -484,6 +494,85 @@ def _thesis_standing(ticker: TickerReport) -> str:
     if unverifiable:
         summary += f" ({unverifiable} unverifiable this run)"
     return f"_{summary}_"
+
+
+# --- The Radar -----------------------------------------------------------------
+
+
+def _radar_section(report: RunReport, considering: Sequence[TickerReport]) -> list[str]:
+    """The discovery funnel, ambient in every issue: the standing scout
+    shortlist, mechanical crossings against today's market wire (a name
+    you're circling DOING something is the highest-signal awareness there
+    is), and the names you've marked `consider`. Argus surfaces; you
+    promote — never the other way around."""
+    lines = ["## Radar", ""]
+    if report.radar:
+        lines.append("On the shortlist (scout):")
+        lines += [
+            f"- #{p.rank} {p.ticker} — {p.sector}, streak {p.streak}w" for p in report.radar
+        ]
+        lines.append("")
+    crossings = _radar_crossings(report.radar, report.market)
+    if crossings:
+        lines += crossings
+        lines.append("")
+    if considering:
+        lines.append("Considering (graduate with `argus promote TICKER --thesis ...`):")
+        lines += [_considering_line(t) for t in considering]
+        lines.append("")
+    lines.append(
+        "_Mechanical joins of persisted data — the shortlist is scout's, the crossings "
+        "are rule-based, and only you move a name up a tier._"
+    )
+    return lines
+
+
+def _radar_crossings(radar, market: MarketWire | None) -> list[str]:
+    """Shortlist ∩ market wire, purely mechanical."""
+    if market is None or not radar:
+        return []
+    streaks = {p.ticker: p.streak for p in radar}
+    hits: list[str] = []
+    for m in (*market.gainers, *market.losers):
+        if m.symbol in streaks:
+            hits.append(
+                f"- ⚡ {m.symbol} (shortlist, {streaks[m.symbol]}w) was a top-5 mover "
+                f"({m.change_pct:+.1f}%)"
+            )
+    for e in (*market.highs, *market.lows):
+        if e.symbol in streaks:
+            kind = "52-week high" if e.kind == "high" else "52-week low"
+            hits.append(f"- ⚡ {e.symbol} (shortlist, {streaks[e.symbol]}w) hit a {kind}")
+    for b in market.earnings_reported:
+        if b.symbol in streaks and b.eps_actual is not None:
+            line = f"- ⚡ {b.symbol} (shortlist, {streaks[b.symbol]}w) reported: EPS {b.eps_actual:.2f}"
+            if b.eps_estimate:
+                line += f" vs {b.eps_estimate:.2f} est"
+            hits.append(line)
+    for b in market.earnings_upcoming:
+        if b.symbol in streaks:
+            when = b.report_date.isoformat() + (f" {b.hour}" if b.hour else "")
+            hits.append(f"- ⚡ {b.symbol} (shortlist, {streaks[b.symbol]}w) reports {when}")
+    return hits
+
+
+def _considering_line(ticker: TickerReport) -> str:
+    name = ticker.context.ticker
+    snapshot = ticker.snapshot
+    if snapshot is None:
+        return f"- {name}: fetch failed this run ({ticker.error or 'unknown error'})"
+    parts = []
+    price = snapshot.values.get(Field.PRICE)
+    if price is not None:
+        parts.append(f"{price.value:.2f}")
+    fwd = snapshot.values.get(Field.PE_FWD)
+    if fwd is not None:
+        parts.append(f"fwd P/E {fwd.value:.1f}")
+    earnings = snapshot.values.get(Field.NEXT_EARNINGS_DATE)
+    if earnings is not None:
+        parts.append(f"reports {earnings.value.isoformat()}")
+    detail = " · ".join(parts) if parts else "no gated data this run"
+    return f"- {name}: {detail}"
 
 
 # --- The market wire (magazine issues) ----------------------------------------
@@ -661,14 +750,15 @@ def _health_section(tickers: Sequence[TickerReport]) -> list[str]:
         tally = tallies.get(source)
         if tally is None:
             if tallies and source is not Source.FRED:
-                # A source with zero rows on a run that fetched anything was
-                # never wired in (no API key / contact email) — permanent
-                # degradation belongs in the digest, not just a CLI echo.
+                # Zero rows on a run that fetched anything: either no key is
+                # configured OR nothing this run needed the source (a
+                # macro-only run never consults edgar/finnhub). The report
+                # cannot tell which — say so honestly, claim neither.
                 # FRED is the exception: it is wired by macro.yaml, not a
                 # secret, and a run with no econ series has nothing to
                 # disclose (its failures still tally when configured).
                 lines.append(
-                    f"- {source.value}: not configured — its cross-checks never ran"
+                    f"- {source.value}: not consulted — no key configured or nothing required it"
                 )
             continue
         parts = []

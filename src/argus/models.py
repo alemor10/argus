@@ -276,6 +276,11 @@ class TickerContext(BaseModel):
     thresholds: Thresholds = Thresholds()
     thesis_checks: tuple[ThesisCheck, ...] = ()
     macro: MacroSpec | None = None
+    # "consider" = the Radar's middle rung: human-added (argus consider),
+    # tracked through the full fetch→gate pipeline daily, but not yet a
+    # committed position thesis — promote graduates it. Argus never adds
+    # names to either tier on its own.
+    tier: Literal["watch", "consider"] = "watch"
 
 
 class AnalystActionRecord(BaseModel):
@@ -760,3 +765,4 @@ class RunReport(BaseModel):
     scorecard: Scorecard | None = None  # scout self-scoring, when there is history
     bellwethers: tuple[BellwetherEarning, ...] = ()  # pre-v1.9 runs' market context (claims)
     market: MarketWire | None = None  # the magazine issue's market pages (claims)
+    radar: tuple[ScoutProposal, ...] = ()  # latest scout shortlist (watch runs; claims+gated)

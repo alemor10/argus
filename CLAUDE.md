@@ -83,6 +83,14 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       week-ahead pins). Sunday posts ONE message: the Edition + the morning's
       scout PDF (scout runs `--deliver never`). See ARCHITECTURE.md, The
       Sunday Edition.
+- [x] The visual issue + Radar (v1.11, 2026-07-16): masthead, macro stat-tile
+      dashboard with 30-day sparklines, sector/mover diverging bar charts,
+      colored earnings wire, page-floor overflow guard. Radar section: standing
+      scout shortlist in every issue, mechanical crossings vs the market wire,
+      and the `consider` tier (`argus consider TICKER` → gated daily tracking,
+      `promote` graduates; consider.yaml is machine-managed). Fixes: calendar
+      duplicate rows deduped (conservative surprise), honest "not consulted"
+      health wording, same-day Δ label. See ARCHITECTURE.md, The Radar.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

@@ -20,10 +20,13 @@ import typer
 import argus
 from argus import engine
 from argus.config import (
+    ConsiderConfig,
     Paths,
+    build_consider_contexts,
     build_contexts,
     build_macro_contexts,
     ensure_no_overlap,
+    load_consider,
     load_macro_config,
     load_watch_config,
     load_watch_config_text,
@@ -183,6 +186,15 @@ series:
 bellwethers: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, TSLA, BRK-B, JPM]
 """
 
+CONSIDER_TEMPLATE = """\
+# Argus consider list — the Radar's middle rung, MACHINE-managed:
+#   argus consider TICKER    adds a name (no thesis required — "keep eyes on it")
+#   argus promote TICKER     graduates it to the watchlist (and removes it here)
+# Considered names are fetched, gated, and shown in every issue; they never
+# alert-page you into the watchlist — that decision stays yours.
+tickers: []
+"""
+
 SCOUT_TEMPLATE = """\
 # Argus scout screening criteria — Quality-GARP, forward-looking. Every value
 # shown is the default; delete a line to keep its default, edit to tune.
@@ -276,14 +288,23 @@ def _pdf_artifact_builder():
 
         if report.kind == "scout":
             tickers = [p.ticker for p in report.scout if p.status == "proposed"]
+            macro_market: list[str] = []
         else:
-            # Macro series get no chart pages (and cost no history fetches).
+            # Macro series get no detail pages; market-quote series DO get a
+            # 30-day sparkline in the dashboard (ungated display data, like
+            # the ticker charts). Econ prints show their period instead.
             tickers = [
                 t.context.ticker
                 for t in report.tickers
                 if t.status != "failed" and t.context.macro is None
             ]
+            macro_market = [
+                t.context.ticker
+                for t in report.tickers
+                if t.context.macro is not None and t.context.macro.source is Source.YAHOO
+            ]
         history = {ticker: fetch_history(ticker) for ticker in tickers}
+        history |= {symbol: fetch_history(symbol, period="1mo") for symbol in macro_market}
         revenue_series = {ticker: fetch_annual_revenue(ticker) for ticker in tickers}
         filename = (
             f"argus-{report.kind}-{report.as_of.date().isoformat()}-run{report.run_id}.pdf"
@@ -406,9 +427,9 @@ def watch(
     try:
         macro_config = load_macro_config(paths.macro)
         macro_contexts = build_macro_contexts(macro_config)
-        contexts = ensure_no_overlap(
-            build_contexts(load_watch_config(paths.watchlist)), macro_contexts
-        )
+        watch_contexts = build_contexts(load_watch_config(paths.watchlist))
+        consider_contexts = build_consider_contexts(load_consider(paths.consider), watch_contexts)
+        contexts = ensure_no_overlap(watch_contexts + consider_contexts, macro_contexts)
     except Exception as exc:  # typo'd key / bad line / overlap: crisp refusal
         typer.echo(f"Cannot build run contexts: {exc}", err=True)
         raise typer.Exit(1) from exc
@@ -483,6 +504,7 @@ def init(root: RootOpt = None) -> None:
         (paths.watchlist, WATCHLIST_TEMPLATE),
         (paths.scout, SCOUT_TEMPLATE),
         (paths.macro, MACRO_TEMPLATE),
+        (paths.consider, CONSIDER_TEMPLATE),
     ):
         if path.exists():
             typer.echo(f"{path} already exists — not touching it.", err=True)
@@ -650,6 +672,47 @@ def recap(
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")
 
 
+def _write_consider(path: Path, tickers: tuple[str, ...]) -> None:
+    """consider.yaml is MACHINE-managed — full rewrite (atomic) is the
+    contract, unlike the human-owned watchlist that promote only appends to."""
+    header = CONSIDER_TEMPLATE.rsplit("tickers:", 1)[0]
+    body = "tickers: [" + ", ".join(tickers) + "]\n" if tickers else "tickers: []\n"
+    staging = path.with_suffix(".yaml.tmp")
+    staging.write_text(header + body, encoding="utf-8")
+    staging.replace(path)
+
+
+@app.command()
+def consider(
+    ticker: Annotated[
+        str, typer.Argument(help="Ticker to keep eyes on — the Radar's middle rung.")
+    ],
+    root: RootOpt = None,
+) -> None:
+    """Add a name to the consider list: tracked through the full fetch→gate
+    pipeline and shown in every issue, no thesis required. Graduate it with
+    `argus promote` when conviction forms. Human-invoked only."""
+    symbol = ticker.strip().upper()
+    if not _TICKER_RE.match(symbol):
+        typer.echo(f"'{ticker}' does not look like a ticker symbol.", err=True)
+        raise typer.Exit(1)
+    paths = resolve_paths(root)
+    if paths.watchlist.exists():
+        watch = build_contexts(load_watch_config(paths.watchlist))
+        if any(c.ticker.upper() == symbol for c in watch):
+            typer.echo(f"{symbol} is already on the watchlist — nothing to consider.", err=True)
+            raise typer.Exit(1)
+    existing = tuple(t.strip().upper() for t in load_consider(paths.consider).tickers)
+    if symbol in existing:
+        typer.echo(f"{symbol} is already being considered.", err=True)
+        raise typer.Exit(1)
+    _write_consider(paths.consider, (*existing, symbol))
+    typer.echo(
+        f"{symbol} is on the Radar — gated tracking starts with the next issue. "
+        f'Graduate it with: argus promote {symbol} --thesis "..."'
+    )
+
+
 @app.command()
 def promote(
     ticker: Annotated[str, typer.Argument(help="Ticker to add to the watchlist.")],
@@ -738,6 +801,12 @@ def promote(
     staging = paths.watchlist.with_suffix(".yaml.tmp")
     staging.write_text(updated, encoding="utf-8")
     staging.replace(paths.watchlist)
+    # Graduation: a promoted name leaves the consider tier (one row per
+    # ticker per run — the tiers are exclusive by construction).
+    considered = tuple(t.strip().upper() for t in load_consider(paths.consider).tickers)
+    if symbol in considered:
+        _write_consider(paths.consider, tuple(t for t in considered if t != symbol))
+        typer.echo(f"{symbol} graduated off the consider list.")
     typer.echo(f"{symbol} promoted to the watchlist — it will appear in the next watch digest.")
 
 

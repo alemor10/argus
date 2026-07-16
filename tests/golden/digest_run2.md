@@ -118,7 +118,7 @@ _Δ vs 2026-07-06_
 ## Data health
 
 - yahoo: 3 ok, 1 error (first: HTTP 502 from upstream)
-- edgar: not configured — its cross-checks never ran
+- edgar: not consulted — no key configured or nothing required it
 - finnhub: 1 ok, 2 errors (first: HTTP 502 from upstream) — price cross-checks skipped (2 tickers)
 
 Failed tickers:

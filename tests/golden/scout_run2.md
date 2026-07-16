@@ -35,8 +35,8 @@ No data quarantined this run.
 ## Data health
 
 - yahoo: 2 ok, 1 error (first: HTTP 502 from upstream)
-- edgar: not configured — its cross-checks never ran
-- finnhub: not configured — its cross-checks never ran
+- edgar: not consulted — no key configured or nothing required it
+- finnhub: not consulted — no key configured or nothing required it
 
 Failed tickers:
 - DEADCO: yahoo: HTTP 502 from upstream

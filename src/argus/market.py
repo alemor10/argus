@@ -260,18 +260,41 @@ def _earnings_wire(
         )
 
     qualified = [with_cap(e) for e in calendar if qualifies(e)]
-    reported = [e for e in qualified if e.eps_actual is not None]
-    upcoming = [e for e in qualified if e.eps_actual is None and e.report_date >= today]
+    # The feed can send duplicate rows for one report (two estimate vintages
+    # were observed live for BNY 2026-07-15). One line per (symbol, date),
+    # keeping the SMALLEST |surprise| — the conservative claim.
+    reported = _dedupe_reported(
+        [e for e in qualified if e.eps_actual is not None]
+    )
+    upcoming_raw = [e for e in qualified if e.eps_actual is None and e.report_date >= today]
+    seen: set[tuple[str, date]] = set()
+    upcoming = []
+    for entry in upcoming_raw:
+        key = (entry.symbol.upper(), entry.report_date)
+        if key not in seen:
+            seen.add(key)
+            upcoming.append(entry)
 
-    def surprise(entry: EarningsWireEntry) -> float:
-        if entry.eps_estimate in (None, 0) or entry.eps_actual is None:
-            return 0.0
-        return abs((entry.eps_actual - entry.eps_estimate) / abs(entry.eps_estimate))
-
-    reported.sort(key=lambda e: (-surprise(e), e.symbol))
+    reported.sort(key=lambda e: (-_abs_surprise(e), e.symbol))
     upcoming.sort(key=lambda e: (-(e.market_cap or 0), e.report_date, e.symbol))
     more = max(len(upcoming) - EARNINGS_UPCOMING_SHOWN, 0)
     return reported[:EARNINGS_REPORTED_SHOWN], upcoming[:EARNINGS_UPCOMING_SHOWN], more
+
+
+def _abs_surprise(entry: EarningsWireEntry) -> float:
+    if entry.eps_estimate in (None, 0) or entry.eps_actual is None:
+        return 0.0
+    return abs((entry.eps_actual - entry.eps_estimate) / abs(entry.eps_estimate))
+
+
+def _dedupe_reported(entries: list[EarningsWireEntry]) -> list[EarningsWireEntry]:
+    best: dict[tuple[str, date], EarningsWireEntry] = {}
+    for entry in entries:
+        key = (entry.symbol.upper(), entry.report_date)
+        current = best.get(key)
+        if current is None or _abs_surprise(entry) < _abs_surprise(current):
+            best[key] = entry
+    return list(best.values())
 
 
 def _num(raw: Any) -> float | None:

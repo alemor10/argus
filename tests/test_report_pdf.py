@@ -685,7 +685,7 @@ class TestDataHealthBlock:
         lines = [text for text, _tone in _health_lines(report)]
         assert lines == [
             "yahoo: 3 ok",
-            "edgar: not configured — its cross-checks never ran",
+            "edgar: not consulted — no key configured or nothing required it",
             "finnhub: 2 ok, 1 error (first: HTTP 502) — price cross-checks skipped (1 ticker)",
             "Failed tickers:",
             "  DDD: HTTP 429 from yahoo",
@@ -1074,6 +1074,32 @@ class TestMarketWirePage:
         report = _watch_report().model_copy(update={"market": self._wire()})
         pdf = build_pdf(report, {})
         assert _page_count(pdf) == 6  # news + wire + status + 3 tickers
+
+    def test_empty_desk_magazine_skips_the_state_page(self):
+        """No watch tickers and no quarantines → news + wire only; the
+        data-health block rides the wire page instead of a near-blank page."""
+        report = RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="complete",
+            tickers=(), market=self._wire(),
+        )
+        pdf = build_pdf(report, {})
+        assert _page_count(pdf) == 2
+
+    def test_dashboard_sparkline_page_renders_with_history(self):
+        from argus.models import MacroSpec
+
+        vix = TickerReport(
+            context=TickerContext(ticker="^VIX", macro=MacroSpec(label="VIX")),
+            status="ok",
+            snapshot=_snapshot("^VIX", {Field.PRICE: _fv(Field.PRICE, 16.39)}),
+        )
+        report = RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="complete", tickers=(vix,),
+        )
+        history = {"^VIX": [(date(2026, 6, 16 + i % 10), 15.0 + i / 10) for i in range(20)]}
+        pdf = build_pdf(report, history)
+        assert pdf.startswith(b"%PDF")
+        assert build_pdf(report, history) == pdf  # tiles + sparklines stay deterministic
 
     def test_wire_lines_mirror_the_digest_numbers(self):
         from argus.report_pdf import (

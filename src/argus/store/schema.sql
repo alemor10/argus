@@ -30,6 +30,8 @@ CREATE TABLE run_tickers (
     macro         TEXT,               -- MacroSpec JSON at run time; NULL = watch role.
                                       -- The whole spec is snapshotted so report --run N
                                       -- reproduces the Macro section after macro.yaml edits.
+    tier          TEXT    NOT NULL DEFAULT 'watch',  -- watch | consider (the Radar's
+                                      -- middle rung; human-added, no thesis yet)
     PRIMARY KEY (run_id, ticker)
 ) WITHOUT ROWID;
 

@@ -51,8 +51,10 @@ from argus.digest import (
     # The digest's own line renderers — the two artifacts must never tell
     # different stories about the same run, so the PDF reuses them verbatim
     # (markdown chrome stripped at the call sites).
+    _considering_line as _digest_considering_line,
     _event_line as _digest_event_line,
     _macro_line as _digest_macro_line,
+    _radar_crossings as _digest_radar_crossings,
     _spread_lines as _digest_spread_lines,
 )
 from argus.fields import SPECS, Field, Source
@@ -90,7 +92,15 @@ _GRID = "#e1e0d9"
 _BASELINE = "#c3c2b7"
 _SERIES = "#2a78d6"
 _CRITICAL = "#d03b3b"  # quarantine lines: status color + explicit label, never color alone
+_UP = "#1e7d46"  # positive changes on charts/wires; sign is always printed too
 _PANEL = "#f9f9f7"
+
+# Dashboard tile order — rates & policy, inflation & jobs, markets, then
+# commodities & crypto; unknown symbols append label-sorted after these.
+_TILE_ORDER = (
+    "^TNX", "^IRX", "DFF", "CPIAUCSL", "PCEPILFE", "UNRATE", "PAYEMS",
+    "^GSPC", "^VIX", "DX-Y.NYB", "GC=F", "CL=F", "BTC-USD",
+)
 
 _UNGATED_FOOTER = (
     "Price & revenue charts: raw Yahoo data, ungated — the metrics panel is gate-verified."
@@ -187,16 +197,26 @@ def build_pdf(
     revenue = revenue_series or {}
     buffer = io.BytesIO()
     with PdfPages(buffer, metadata=metadata) as pdf:
-        _save(pdf, _summary_page(report, total_details=len(subjects), shown_details=len(shown)))
+        _save(
+            pdf,
+            _summary_page(
+                report, history, total_details=len(subjects), shown_details=len(shown)
+            ),
+        )
         if report.kind == "watch":
             # PDF-first (v1.8): the PDF is the delivered artifact, so it
-            # carries the WHOLE digest — page 1 is the news (Macro, Changes,
-            # Bellwethers), the market-wire page follows on magazine issues
-            # (v1.9), then the state page (watchlist table, quarantines,
-            # data health), then the per-ticker detail pages.
+            # carries the WHOLE digest — page 1 is the news (masthead, macro
+            # dashboard, Changes, Radar), the market-wire page follows on
+            # magazine issues (v1.9, charts), then the state page (watchlist
+            # table, quarantines, data health — skipped when there is no
+            # state to show, its health block riding the wire page instead),
+            # then the per-ticker detail pages.
+            desk = [t for t in report.tickers if t.context.macro is None]
+            has_state = bool(desk) or any(t.quarantines for t in report.tickers)
             if report.market is not None:
-                _save(pdf, _market_wire_page(report))
-            _save(pdf, _watch_status_page(report))
+                _save(pdf, _market_wire_page(report, include_health=not has_state))
+            if has_state or report.market is None:
+                _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
     return buffer.getvalue()
@@ -272,23 +292,28 @@ class _Cursor:
         self.y -= dy
 
 
-def _summary_page(report: RunReport, *, total_details: int, shown_details: int) -> Figure:
+def _summary_page(
+    report: RunReport, history: History, *, total_details: int, shown_details: int
+) -> Figure:
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
-    cur.line(
-        f"Argus {report.kind} digest — run {report.run_id} — {report.as_of.date().isoformat()}",
-        size=15, weight="bold",
-    )
-    cur.gap(0.012)
+    if report.kind == "watch":
+        _masthead(fig, cur, report)
+    else:
+        cur.line(
+            f"Argus {report.kind} digest — run {report.run_id} — {report.as_of.date().isoformat()}",
+            size=15, weight="bold",
+        )
+        cur.gap(0.012)
     cur.wrapped(_status_line(report), size=9.5, color=_SECONDARY)
     if report.notes:
         cur.gap(0.004)
         cur.wrapped(f"Note: {report.notes}", size=9, color=_SECONDARY, style="italic")
-    cur.gap(0.018)
+    cur.gap(0.014)
     if report.kind == "scout":
         _scout_summary(fig, cur, report)
     else:
-        _watch_news(fig, cur, report)
+        _watch_news(fig, cur, report, history)
     if total_details > shown_details:
         cur.gap(0.012)
         cur.line(
@@ -543,7 +568,7 @@ def _health_lines(report: RunReport) -> list[tuple[str, str]]:
                 # in the report, not just a CLI echo. FRED is wired by
                 # macro.yaml, not a secret — nothing to disclose when absent.
                 lines.append(
-                    (f"{source.value}: not configured — its cross-checks never ran", _MUTED)
+                    (f"{source.value}: not consulted — no key configured or nothing required it", _MUTED)
                 )
             continue
         parts = []
@@ -594,30 +619,266 @@ _MAX_BELLWETHER_LINES = 14
 _MAX_QUARANTINE_LINES = 12
 
 
+_PAGE_FLOOR = 0.075  # the footer's airspace — no block line may enter it
+
+
 def _block(cur: _Cursor, title: str, lines: list[tuple[str, str]], cap: int) -> None:
+    """A titled list with two overflow rails: the block's own cap, and the
+    page floor — whichever bites first, the truncation is disclosed (the
+    markdown digest always carries the full record)."""
+    if cur.y < _PAGE_FLOOR + 0.05:  # no room for a header plus one line
+        return
     cur.line(title, size=11, weight="bold")
     cur.gap(0.008)
-    for text, tone in lines[:cap]:
+    shown = lines[:cap]
+    truncated_at: int | None = None
+    for i, (text, tone) in enumerate(shown):
+        if cur.y < _PAGE_FLOOR + 0.018 and i < len(shown) - 1:
+            truncated_at = i
+            break
         cur.line(text, size=8.5, color=tone)
-    if len(lines) > cap:
+    hidden = (len(lines) - truncated_at) if truncated_at is not None else len(lines) - len(shown)
+    if hidden > 0 and cur.y >= _PAGE_FLOOR:
         cur.line(
-            f"… and {len(lines) - cap} more — the markdown digest carries the full list.",
+            f"… and {hidden} more — the markdown digest carries the full list.",
             size=8.5, color=_MUTED,
         )
     cur.gap(0.014)
 
 
-def _watch_news(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+def _watch_news(fig: Figure, cur: _Cursor, report: RunReport, history: History) -> None:
     """Watch page 1 — what the reader opens the report for: the macro
-    backdrop, then every change event, then the bellwether calendar."""
-    macro_lines = _macro_pdf_lines(report)
-    if macro_lines:
-        _block(cur, "Macro", macro_lines, _MAX_MACRO_LINES)
+    dashboard (stat tiles + sparklines), then every change event, then the
+    Radar (discovery funnel)."""
+    macro = [t for t in report.tickers if t.context.macro is not None]
+    if macro:
+        _macro_dashboard(fig, cur, macro, history)
     _block(cur, "Changes", _changes_pdf_lines(report), _MAX_CHANGES_LINES)
+    radar_lines = _radar_pdf_lines(report)
+    if radar_lines:
+        _block(cur, "Radar", radar_lines, 22)
     bellwether_lines = _bellwether_pdf_lines(report)
     if bellwether_lines:
         _block(cur, "Bellwether earnings (finnhub, unverified)", bellwether_lines,
                _MAX_BELLWETHER_LINES)
+
+
+def _masthead(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+    """The issue's front-page identity: name left, date right, hairline under.
+    Run number and regeneration live in the footer — a masthead is not a log
+    line."""
+    import matplotlib.lines as mlines
+
+    fig.text(0.07, cur.y, "THE ARGUS DAILY", ha="left", va="top",
+             fontsize=19, fontweight="bold", color=_INK)
+    fig.text(0.93, cur.y - 0.004, report.as_of.strftime("%A · %B %-d, %Y"),
+             ha="right", va="top", fontsize=9.5, color=_SECONDARY)
+    cur.gap(0.036)
+    fig.add_artist(
+        mlines.Line2D([0.07, 0.93], [cur.y, cur.y], transform=fig.transFigure,
+                      color=_INK, linewidth=1.1)
+    )
+    cur.gap(0.012)
+
+
+def _macro_dashboard(
+    fig: Figure, cur: _Cursor, macro: Sequence[TickerReport], history: History
+) -> None:
+    """Stat tiles, four per row: small label, BIG value, colored Δ vs the
+    baseline run, and a 30-day sparkline for market series (ungated display
+    data, same policy as the ticker charts). Econ prints show their period
+    instead — a monthly series barely sparkles. Sanity violations and crossed
+    lines flag in the caption slot; the number always dominates."""
+    order = {symbol: i for i, symbol in enumerate(_TILE_ORDER)}
+    tiles = sorted(
+        macro,
+        key=lambda t: (order.get(t.context.ticker, 99), t.context.macro.label),
+    )
+    columns = 4
+    tile_w = 0.86 / columns
+    tile_h = 0.088
+    top = cur.y
+    for i, ticker in enumerate(tiles):
+        row, col = divmod(i, columns)
+        x = 0.07 + col * tile_w
+        y = top - row * tile_h
+        _stat_tile(fig, ticker, history, x=x, y=y, width=tile_w - 0.012)
+    rows = -(-len(tiles) // columns)
+    cur.y = top - rows * tile_h
+    spread = _digest_spread_lines(list(macro))
+    if spread:
+        text = spread[0].removeprefix("- ").replace("_(", "(").replace(")_", ")")
+        cur.line(text, size=8, color=_SECONDARY)
+    cur.gap(0.012)
+
+
+def _stat_tile(
+    fig: Figure, ticker: TickerReport, history: History, *, x: float, y: float, width: float
+) -> None:
+    spec = ticker.context.macro
+    assert spec is not None
+    fig.text(x, y, spec.label, ha="left", va="top", fontsize=7, color=_SECONDARY)
+    snapshot = ticker.snapshot
+    fv = snapshot.values.get(spec.value_field) if snapshot is not None else None
+    if fv is None or not isinstance(fv.value, (int, float)):
+        hits = snapshot.quarantined.get(spec.value_field) if snapshot else None
+        fig.text(x, y - 0.014, "—", ha="left", va="top", fontsize=13, color=_MUTED)
+        fig.text(x, y - 0.034, "quarantined" if hits else "no data",
+                 ha="left", va="top", fontsize=6.5, color=_CRITICAL if hits else _MUTED)
+        return
+    value_text = f"{fv.value:,.{spec.decimals}f}{spec.unit}"
+    fig.text(x, y - 0.012, value_text, ha="left", va="top",
+             fontsize=13.5, fontweight="bold", color=_INK)
+    delta = _tile_delta(ticker, fv, spec)
+    if delta is not None:
+        tone = _UP if delta > 0 else _CRITICAL if delta < 0 else _SECONDARY
+        fig.text(x, y - 0.031, f"{delta:+,.{spec.decimals}f}", ha="left", va="top",
+                 fontsize=8, color=tone)
+    caption: tuple[str, str] | None = None
+    if spec.sanity is not None and not (spec.sanity[0] <= fv.value <= spec.sanity[1]):
+        caption = ("⚠ check units", _CRITICAL)
+    elif any(
+        r.status == "holds"
+        for r in evaluate_thesis_checks(spec.alert_when, snapshot)
+    ):
+        caption = ("⚠ line crossed", _CRITICAL)
+    elif spec.source == Source.FRED and fv.observed_at is not None:
+        caption = (f"period {fv.observed_at.date().isoformat()}", _MUTED)
+    if caption is not None:
+        fig.text(x, y - 0.045, caption[0], ha="left", va="top", fontsize=6.5,
+                 color=caption[1])
+    points = history.get(ticker.context.ticker)
+    if points and len(points) >= 2 and spec.source != Source.FRED:
+        ax = fig.add_axes((x, y - 0.075, width, 0.024))
+        ax.axis("off")
+        values = [p[1] for p in points]
+        ax.plot(range(len(values)), values, color=_SERIES, linewidth=0.9)
+        ax.plot([len(values) - 1], [values[-1]], "o", color=_SERIES, markersize=1.8)
+        ax.margins(x=0.02, y=0.15)
+
+
+def _tile_delta(ticker: TickerReport, fv, spec) -> float | None:
+    baseline = ticker.baseline
+    if baseline is None:
+        return None
+    old = baseline.values.get(spec.value_field)
+    if old is None or not isinstance(old.value, (int, float)):
+        return None
+    delta = round(fv.value - old.value, spec.decimals)
+    return delta if delta != 0 else None
+
+
+def _sector_chart(fig: Figure, cur: _Cursor, wire) -> None:
+    """The rotation, visible from across the room: one horizontal bar per
+    canonical sector, median last-session change, red/green with the sign
+    printed too (never color alone)."""
+    pulses = list(wire.sectors)
+    if not pulses:
+        return
+    cur.line("Sector pulse", size=11, weight="bold")
+    cur.gap(0.006)
+    height = 0.018 * len(pulses)
+    ax = fig.add_axes((0.30, cur.y - height, 0.52, height))
+    values = [p.median_change_pct for p in pulses][::-1]
+    labels = [f"{p.sector}  ({p.n})" for p in pulses][::-1]
+    colors = [_UP if v > 0 else _CRITICAL if v < 0 else _BASELINE for v in values]
+    ax.barh(range(len(values)), values, color=colors, height=0.62)
+    ax.axvline(0, color=_BASELINE, linewidth=0.8)
+    ax.set_yticks(range(len(values)))
+    ax.set_yticklabels(labels, fontsize=7, color=_INK)
+    ax.tick_params(axis="y", length=0)
+    ax.set_xticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    biggest = max(abs(v) for v in values) or 1.0
+    ax.set_xlim(-biggest * 1.35, biggest * 1.35)
+    for i, v in enumerate(values):
+        ax.annotate(
+            f"{v:+.1f}%",
+            xy=(v, i),
+            xytext=(4 if v >= 0 else -4, 0),
+            textcoords="offset points",
+            va="center",
+            ha="left" if v >= 0 else "right",
+            fontsize=7,
+            color=_INK,
+        )
+    cur.gap(height + 0.014)
+
+
+def _movers_chart(fig: Figure, cur: _Cursor, wire) -> None:
+    """Top movers as diverging bars: gainers up top in green, losers below in
+    red, company names annotated — the day's outliers at a glance."""
+    movers = [*wire.gainers, *wire.losers]
+    if not movers:
+        cur.line("Market movers", size=11, weight="bold")
+        cur.gap(0.006)
+        cur.line("No large-cap gainers or losers last session — a flat tape is information.",
+                 size=8.5, color=_SECONDARY)
+        cur.gap(0.012)
+        return
+    cur.line("Market movers", size=11, weight="bold")
+    cur.gap(0.006)
+    height = 0.018 * len(movers)
+    ax = fig.add_axes((0.12, cur.y - height, 0.76, height))
+    values = [m.change_pct for m in movers][::-1]
+    labels = [m.symbol for m in movers][::-1]
+    names = [(m.company or m.sector) for m in movers][::-1]
+    colors = [_UP if v > 0 else _CRITICAL for v in values]
+    ax.barh(range(len(values)), values, color=colors, height=0.6)
+    ax.axvline(0, color=_BASELINE, linewidth=0.8)
+    ax.set_yticks([])
+    ax.set_xticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    biggest = max(abs(v) for v in values) or 1.0
+    ax.set_xlim(-biggest * 1.75, biggest * 1.75)
+    for i, (v, label, name) in enumerate(zip(values, labels, names)):
+        # Symbol on the empty side of the zero line; value + name at the tip.
+        ax.annotate(
+            label,
+            xy=(0, i),
+            xytext=(-5 if v >= 0 else 5, 0),
+            textcoords="offset points",
+            va="center",
+            ha="right" if v >= 0 else "left",
+            fontsize=7.5, fontweight="bold", color=_INK,
+        )
+        ax.annotate(
+            f"{v:+.1f}%  {_clip(name, 24)}",
+            xy=(v, i),
+            xytext=(4 if v >= 0 else -4, 0),
+            textcoords="offset points",
+            va="center",
+            ha="left" if v >= 0 else "right",
+            fontsize=6.5, color=_SECONDARY,
+        )
+    cur.gap(height + 0.014)
+
+
+def _radar_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
+    """The discovery funnel via the digest's own renderers: shortlist strip,
+    mechanical crossings against the wire, and considered names."""
+    lines: list[tuple[str, str]] = []
+    if report.radar:
+        lines.append(("On the shortlist (scout):", _SECONDARY))
+        lines += [
+            (f"   #{p.rank} {p.ticker} — {p.sector}, streak {p.streak}w", _INK)
+            for p in report.radar
+        ]
+    for hit in _digest_radar_crossings(report.radar, report.market):
+        lines.append((_clip(hit.removeprefix("- "), 114), _CRITICAL))
+    considering = [
+        t for t in report.tickers
+        if t.context.macro is None and t.context.tier == "consider"
+    ]
+    if considering:
+        lines.append(("Considering (promote with a thesis to graduate):", _SECONDARY))
+        lines += [
+            (_clip("   " + _digest_considering_line(t).removeprefix("- "), 114), _INK)
+            for t in considering
+        ]
+    return lines
 
 
 def _watch_status_page(report: RunReport) -> Figure:
@@ -636,20 +897,27 @@ def _watch_status_page(report: RunReport) -> Figure:
     return fig
 
 
-def _market_wire_page(report: RunReport) -> Figure:
-    """The magazine's market pages: movers, sector pulse, earnings wire,
-    52-week extremes — all claims-labeled, curated by the mechanical rules
-    in market.py."""
+def _market_wire_page(report: RunReport, *, include_health: bool = False) -> Figure:
+    """The magazine's market pages: movers and sector rotation as charts,
+    the earnings wire and 52-week extremes as colored lists — all
+    claims-labeled, curated by the mechanical rules in market.py. Carries
+    the data-health block when the state page is skipped (empty desk)."""
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
     cur.line("The market, last session", size=13, weight="bold")
     cur.gap(0.014)
     wire = report.market
     assert wire is not None  # build_pdf only routes here when present
-    _block(cur, "Market movers", _movers_pdf_lines(wire), 14)
-    _block(cur, "Sector pulse", _sectors_pdf_lines(wire), 13)
-    _block(cur, "Earnings wire", _earnings_wire_pdf_lines(wire), 22)
-    _block(cur, "New 52-week extremes", _extremes_pdf_lines(wire), 20)
+    _movers_chart(fig, cur, wire)
+    _sector_chart(fig, cur, wire)
+    _block(cur, "Earnings wire", _earnings_wire_pdf_lines(wire), 15)
+    _block(cur, "New 52-week extremes", _extremes_pdf_lines(wire), 10)
+    if include_health:
+        cur.line("Data health", size=11, weight="bold")
+        cur.gap(0.006)
+        for text, tone in _health_lines(report):
+            cur.line(text, size=8, color=tone)
+        cur.gap(0.008)
     cur.line(
         "Claims-labeled context (tradingview + finnhub), mechanical curation — "
         "never gated, never a delivery trigger.",
@@ -694,12 +962,14 @@ def _earnings_wire_pdf_lines(wire) -> list[tuple[str, str]]:
         lines.append(("Reported:", _SECONDARY))
         for b in wire.earnings_reported:
             text = f"   {b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
+            tone = _INK
             if b.eps_estimate is not None:
                 text += f" vs {b.eps_estimate:.2f} est"
                 if b.eps_estimate != 0:
                     surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
                     text += f" ({surprise:+.1f}%)"
-            lines.append((text, _INK))
+                    tone = _UP if surprise > 0 else _CRITICAL if surprise < 0 else _INK
+            lines.append((text, tone))
     if wire.earnings_upcoming:
         lines.append(("Upcoming:", _SECONDARY))
         for b in wire.earnings_upcoming:
@@ -719,13 +989,16 @@ def _extremes_pdf_lines(wire) -> list[tuple[str, str]]:
     if not wire.highs and not wire.lows:
         return [("No large caps at 52-week marks last session.", _SECONDARY)]
     lines: list[tuple[str, str]] = []
-    for title, extremes in (("At highs:", wire.highs), ("At lows:", wire.lows)):
+    for title, extremes, tone in (
+        ("At highs:", wire.highs, _UP),
+        ("At lows:", wire.lows, _CRITICAL),
+    ):
         if not extremes:
             continue
         lines.append((title, _SECONDARY))
         for e in extremes:
             name = f" — {e.company}" if e.company else ""
-            lines.append((_clip(f"   {e.symbol} {e.close:.2f}{name}", 114), _INK))
+            lines.append((_clip(f"   {e.symbol} {e.close:.2f}{name}", 114), tone))
     return lines
 
 

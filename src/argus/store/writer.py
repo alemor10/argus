@@ -169,8 +169,8 @@ def write_ticker_result(
             )
         con.execute(
             "INSERT INTO run_tickers "
-            "(run_id, ticker, status, error, thesis, thresholds, thesis_checks, macro) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            "(run_id, ticker, status, error, thesis, thresholds, thesis_checks, macro, tier) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 run_id,
                 context.ticker,
@@ -180,6 +180,7 @@ def write_ticker_result(
                 context.thresholds.model_dump_json(),
                 json.dumps([c.model_dump(mode="json") for c in context.thesis_checks]),
                 context.macro.model_dump_json() if context.macro is not None else None,
+                context.tier,
             ),
         )
         if company_profile is not None:

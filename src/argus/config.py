@@ -22,6 +22,7 @@ from argus.thesis import parse_thesis_check
 DEFAULT_WATCHLIST = "watchlist.yaml"
 DEFAULT_SCOUT = "scout.yaml"
 DEFAULT_MACRO = "macro.yaml"
+DEFAULT_CONSIDER = "consider.yaml"
 DEFAULT_DB = "argus.db"
 DEFAULT_REPORTS = "reports"
 
@@ -32,6 +33,7 @@ class Paths:
     watchlist: Path
     scout: Path
     macro: Path
+    consider: Path
     db: Path
     reports: Path
 
@@ -42,6 +44,7 @@ def resolve_paths(
     watchlist: Path | None = None,
     scout: Path | None = None,
     macro: Path | None = None,
+    consider: Path | None = None,
     db: Path | None = None,
     reports: Path | None = None,
 ) -> Paths:
@@ -52,6 +55,7 @@ def resolve_paths(
         watchlist=(watchlist or base / DEFAULT_WATCHLIST).resolve(),
         scout=(scout or base / DEFAULT_SCOUT).resolve(),
         macro=(macro or base / DEFAULT_MACRO).resolve(),
+        consider=(consider or base / DEFAULT_CONSIDER).resolve(),
         db=(db or base / DEFAULT_DB).resolve(),
         reports=(reports or base / DEFAULT_REPORTS).resolve(),
     )
@@ -108,6 +112,49 @@ def build_contexts(config: WatchConfig) -> list[TickerContext]:
                 thesis_checks=checks,
             )
         )
+    return contexts
+
+
+class ConsiderConfig(BaseModel):
+    """consider.yaml — the Radar's middle rung. MACHINE-managed (unlike the
+    human-owned watchlist): `argus consider` appends, `argus promote` removes
+    on graduation. Names here are tracked through the full fetch→gate
+    pipeline daily with no thesis required; Argus never adds one itself."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    tickers: tuple[str, ...] = ()
+
+
+def load_consider(path: Path) -> ConsiderConfig:
+    if not path.exists():
+        return ConsiderConfig()
+    raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    return ConsiderConfig.model_validate(raw)
+
+
+def build_consider_contexts(
+    config: ConsiderConfig, watch: list[TickerContext]
+) -> list[TickerContext]:
+    """consider.yaml → consider-tier contexts (default thresholds, no thesis).
+    A name on both lists errors — the run_tickers primary key allows one row
+    per ticker, and 'promote' is the sanctioned move between tiers."""
+    watched = {ctx.ticker.upper() for ctx in watch}
+    contexts: list[TickerContext] = []
+    seen: set[str] = set()
+    for raw in config.tickers:
+        symbol = raw.strip().upper()
+        if not symbol:
+            continue
+        if symbol in seen:
+            raise ValueError(f"duplicate ticker in consider.yaml: {symbol}")
+        if symbol in watched:
+            raise ValueError(
+                f"{symbol} is on both watchlist.yaml and consider.yaml — "
+                "promote removed it from consider; delete the leftover entry"
+            )
+        seen.add(symbol)
+        contexts.append(TickerContext(ticker=symbol, tier="consider"))
     return contexts
 
 

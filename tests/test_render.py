@@ -397,6 +397,50 @@ class TestBellwetherSection:
         assert "Bellwether" not in out
 
 
+class TestRadarSection:
+    def _radar(self):
+        from argus.models import ScoutProposal
+
+        return (
+            ScoutProposal(ticker="NVDA", rank=3, status="proposed", sector="Technology",
+                          screen_reasons={}, screener_metrics={}, streak=6),
+            ScoutProposal(ticker="FSLR", rank=8, status="proposed", sector="Technology",
+                          screen_reasons={}, screener_metrics={}, streak=6),
+        )
+
+    def test_strip_crossings_and_considering(self):
+        from argus.models import Extreme, MarketWire, Mover
+
+        wire = MarketWire(
+            universe=100,
+            losers=(Mover(symbol="NVDA", sector="Technology", close=203.0, change_pct=-6.1),),
+            highs=(Extreme(symbol="FSLR", close=223.8, kind="high"),),
+        )
+        considering = _quiet_ticker(
+            name="ONON",
+            context=TickerContext(ticker="ONON", tier="consider"),
+            snapshot=Snapshot(
+                ticker="ONON", run_id=7, as_of=NOW,
+                values={Field.PRICE: _fv(Field.PRICE, 37.46),
+                        Field.PE_FWD: _fv(Field.PE_FWD, 17.5)},
+            ),
+        )
+        report = RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(considering,), market=wire, radar=self._radar(),
+        )
+        out = render(report)
+        assert "- #3 NVDA — Technology, streak 6w" in out
+        assert "- ⚡ NVDA (shortlist, 6w) was a top-5 mover (-6.1%)" in out
+        assert "- ⚡ FSLR (shortlist, 6w) hit a 52-week high" in out
+        assert "- ONON: 37.46 · fwd P/E 17.5" in out
+        assert "_Considering — promote with a thesis to graduate._" in out
+
+    def test_no_radar_no_section(self):
+        out = render(_report([_quiet_ticker()]))
+        assert "## Radar" not in out
+
+
 class TestMarketWireSections:
     def _wire_report(self):
         from argus.models import EarningsWireEntry, Extreme, MarketWire, Mover, SectorPulse

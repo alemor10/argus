@@ -805,6 +805,28 @@ reproduces the issue. Cadence: Tue–Sat issues post always (each covers a
 real trading day); Monday is a quiet events-only pulse (its market data
 would reprint Saturday's); Sunday carries scout + the weekly recap.
 
+## The Radar + the visual issue — v1.11
+
+The ladder between "saw a name in the wire" and "promoted with a thesis":
+the **Radar** renders in every issue — the standing scout shortlist (read
+from the latest evaluated scout run, so `report --run N` reproduces it),
+mechanical **crossings** against the day's market wire (a shortlist name
+among the movers / at a 52-week mark / reporting — rule-based joins of
+persisted data, never judgment), and the **consider tier**: `argus consider
+TICKER` adds a name with no thesis to machine-managed consider.yaml
+(`run_tickers.tier`, schema v9); it rides the full fetch→gate pipeline daily
+until `promote` graduates it (removing it from consider — the tiers are
+exclusive, one row per ticker per run). Argus still never adds a name to any
+tier itself. Considered names stay IN the scout universe (streak continuity);
+only promoted names are excluded from proposals.
+
+Visually the Daily became an issue: masthead, a macro stat-tile dashboard
+(big numbers, colored Δs, 30-day sparklines for market series — ungated
+display data like the ticker charts; econ prints show their period),
+diverging bar charts for sector pulse and movers, colored earnings wire, and
+a page-floor guard so no list can ever run into the footer (truncation is
+always disclosed; the markdown record is complete).
+
 ## The Sunday Edition — v1.10 (weekly recap)
 
 `argus recap` is the week in one PDF, aggregated ENTIRELY from the store —
