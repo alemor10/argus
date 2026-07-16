@@ -716,6 +716,13 @@ class TestHasNewInformation:
         )
         assert has_new_information(self._report(self._ticker(events=(drift,)))) is True
 
+    def test_etf_rebalance_delivers(self):
+        from argus.models import EtfRebalance
+
+        report = self._report(self._ticker())
+        report = report.model_copy(update={"etf_rebalances": (EtfRebalance(etf="SPY", added=("X",)),)})
+        assert has_new_information(report) is True
+
     def test_failed_ticker_delivers(self):
         """A name going dark is news even with zero events."""
         assert has_new_information(self._report(self._ticker(status="failed"))) is True

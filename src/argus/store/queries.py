@@ -16,6 +16,8 @@ from argus.models import (
     BellwetherEarning,
     CompanyProfile,
     EarningsResultRecord,
+    EtfHolding,
+    EtfRebalance,
     FieldValue,
     MacroSpec,
     MarketWire,
@@ -337,7 +339,48 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
         bellwethers=_bellwether_earnings(con, run_id) if run["kind"] == "watch" else (),
         market=_market_wire(con, run_id) if run["kind"] == "watch" else None,
         radar=_radar_shortlist(con, run_id) if run["kind"] == "watch" else (),
+        etf_rebalances=_etf_rebalances(con, run_id) if run["kind"] == "watch" else (),
     )
+
+
+def latest_etf_holdings(
+    con: sqlite3.Connection, etf: str, before_run: int
+) -> list[EtfHolding] | None:
+    """The most recent membership snapshot for this ETF strictly before
+    `before_run` — the change-check's baseline AND the rebalance's prior
+    side. None when the ETF has never been snapshotted."""
+    row = con.execute(
+        "SELECT holdings FROM etf_holdings WHERE etf = ? AND run_id < ? "
+        "ORDER BY run_id DESC LIMIT 1",
+        (etf, before_run),
+    ).fetchone()
+    return _hydrate_holdings(row["holdings"]) if row is not None else None
+
+
+def _etf_rebalances(con: sqlite3.Connection, run_id: int) -> tuple[EtfRebalance, ...]:
+    """Reproducible from stored blobs: for each ETF snapshotted THIS run,
+    diff against the prior snapshot. A first-ever snapshot has no prior and
+    is baseline, not news — skipped, like a ticker's first analyst history."""
+    from argus.etf import membership_diff
+
+    result: list[EtfRebalance] = []
+    for row in con.execute(
+        "SELECT etf, holdings FROM etf_holdings WHERE run_id = ? ORDER BY etf", (run_id,)
+    ):
+        prior = latest_etf_holdings(con, row["etf"], run_id)
+        if prior is None:
+            continue
+        added, dropped = membership_diff(prior, _hydrate_holdings(row["holdings"]))
+        if added or dropped:
+            result.append(EtfRebalance(etf=row["etf"], added=added, dropped=dropped))
+    return tuple(result)
+
+
+def _hydrate_holdings(blob: str) -> list[EtfHolding]:
+    return [
+        EtfHolding(ticker=d["t"], weight=d.get("w", 0.0), name=d.get("n"))
+        for d in json.loads(blob)
+    ]
 
 
 def _radar_shortlist(con: sqlite3.Connection, before_run: int) -> tuple[ScoutProposal, ...]:

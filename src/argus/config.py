@@ -182,6 +182,7 @@ class MacroConfig(BaseModel):
 
     series: tuple[MacroSeriesEntry, ...] = ()
     bellwethers: tuple[str, ...] = ()  # megacap earnings-context list (claims-labeled)
+    etfs: tuple[str, ...] = ()  # well-known ETFs to watch for rebalancing (SSGA/SPDR feed)
 
 
 def load_macro_config(path: Path) -> MacroConfig:

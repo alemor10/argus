@@ -107,6 +107,8 @@ def render(report: RunReport) -> str:
         considering = [t for t in watch if t.context.tier == "consider"]
         if report.radar or considering:
             parts.append(_radar_section(report, considering))
+        if report.etf_rebalances:
+            parts.append(_etf_rebalance_section(report))
         if report.market is not None:  # the issue's market pages (magazine mode)
             parts += [
                 _movers_section(report.market),
@@ -556,6 +558,23 @@ def _radar_crossings(radar, market: MarketWire | None) -> list[str]:
             when = b.report_date.isoformat() + (f" {b.hour}" if b.hour else "")
             hits.append(f"- ⚡ {b.symbol} (shortlist, {streaks[b.symbol]}w) reports {when}")
     return hits
+
+
+def _etf_rebalance_section(report: RunReport) -> list[str]:
+    """Well-known ETFs whose constituents changed since the last snapshot — a
+    forced-flow signal (an index add means index funds must buy). Shown only
+    when something changed; a quiet run stores and says nothing."""
+    lines = ["## ETF rebalancing (ssga, unverified)", ""]
+    for r in report.etf_rebalances:
+        if r.added:
+            lines.append(f"- {r.etf} added: {', '.join(r.added)}")
+        if r.dropped:
+            lines.append(f"- {r.etf} dropped: {', '.join(r.dropped)}")
+    lines.append(
+        "_Constituent changes in each issuer's daily holdings — a claims-labeled "
+        "diff, never gated. An index add is forced buying; a drop the reverse._"
+    )
+    return lines
 
 
 def _considering_line(ticker: TickerReport) -> str:

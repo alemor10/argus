@@ -397,6 +397,29 @@ class TestBellwetherSection:
         assert "Bellwether" not in out
 
 
+class TestEtfRebalanceSection:
+    def test_added_and_dropped_render_when_changed(self):
+        from argus.models import EtfRebalance
+
+        report = RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(_quiet_ticker(),),
+            etf_rebalances=(
+                EtfRebalance(etf="SPY", added=("NEWCO",), dropped=("OLDCO", "GONE")),
+                EtfRebalance(etf="XLK", added=("CHIPCO",)),
+            ),
+        )
+        out = render(report)
+        assert "## ETF rebalancing (ssga, unverified)" in out
+        assert "- SPY added: NEWCO" in out
+        assert "- SPY dropped: OLDCO, GONE" in out
+        assert "- XLK added: CHIPCO" in out
+
+    def test_no_rebalance_no_section(self):
+        out = render(_report([_quiet_ticker()]))
+        assert "ETF rebalancing" not in out
+
+
 class TestRadarSection:
     def _radar(self):
         from argus.models import ScoutProposal

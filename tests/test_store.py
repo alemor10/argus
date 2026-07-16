@@ -154,6 +154,19 @@ def test_migrate_v7_adds_market_wire(tmp_path):
     con.close()
 
 
+def test_migrate_v9_adds_etf_holdings(tmp_path):
+    """v1.14: the ETF membership change-log table appears at v10."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    con.execute("DROP TABLE etf_holdings")  # recreate a v9-shaped database
+    con.execute("PRAGMA user_version = 9")
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "etf_holdings" in tables
+    con.close()
+
+
 def test_earnings_results_dedup_on_natural_key(con):
     insert = """INSERT OR IGNORE INTO earnings_results
         (ticker, quarter_end, eps_actual, eps_estimate, source, fetched_at, first_seen_run_id)

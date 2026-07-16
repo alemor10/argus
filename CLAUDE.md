@@ -101,8 +101,17 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       yield), the street's view (consensus, mean target — render-railed to
       [0.3,3]×price, the NTDOY rule applied to claims; analyst count), a
       sentence-trimmed summary, and a 1-year price strip (ungated, captioned).
-- [ ] ETF look-through concentration: resolve constituents → true aggregate
-      single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
+- [x] ETF rebalancing (v1.14, 2026-07-16): watch well-known ETFs (SPY, DIA,
+      the 11 sector SPDRs) via the SSGA daily-holdings feed; report constituent
+      adds/drops when membership changes (forced-flow signal — an index add
+      means index funds must buy). Change-log storage (blob only on change),
+      reproducible diff, claims-labeled, feeds the delivery gate. Tickers come
+      directly from the feed, so the CUSIP→ticker join that made N-PORT the
+      "hardest data-eng piece" is skipped. iShares/Vanguard/N-PORT slot in
+      behind the HoldingsSource protocol later. See ARCHITECTURE.md, ETF
+      rebalancing.
+- [ ] ETF look-through concentration (portfolio's true single-name exposure):
+      needs holdings you own; distinct from the rebalancing feature above.
 
 ### Scout self-scoring — SHIPPED v1.5 (2026-07-14, "grade the grader")
 - [x] Each scout run scores how its past proposals have done vs SPY — realized
@@ -127,6 +136,7 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
 | Price, valuation, earnings dates, analyst data | Yahoo via `yfinance` | Free; covered ALL spike tickers incl. OTC ADRs (NTDOY/TCEHY/NSRGY), BRK-B, ETFs. `upgrades_downgrades` gives dated rating-change history. Unofficial API — expect breakage, design the fetch layer behind an adapter interface. |
 | Fundamentals cross-check (US filers) | SEC EDGAR `companyfacts` | Free, official. Covers 20-F foreign filers (ASML) too. Symbology uses dashes (`BRK-B`). Needs a `User-Agent` header with contact email. NOT available for OTC ADRs or ETFs. |
 | Price cross-check | Finnhub free tier | 60 req/min with free API key; ample at watchlist scale. Its `/calendar/earnings` also feeds the bellwether context section (one call, claims-labeled). (Stooq is dead/blocked — do not use.) |
+| ETF holdings (rebalancing) | SSGA / SPDR daily-holdings xlsx (verified 2026-07-16) | Uniform per-fund endpoint, gives tickers directly (no CUSIP join). Unofficial issuer feed behind `etf.HoldingsSource`; iShares blocks headless, so SPDR is the starter issuer. |
 | Macro economic series (CPI, jobs, rates) | FRED via keyless `fredgraph.csv` (verified 2026-07-15) | Unofficial-but-free chart endpoint, accepted eyes-open behind `sources/fred.py`; the keyed official API (free registration) is the upgrade path. Yahoo carries the market-quote macro series (^TNX/^IRX/^VIX/^GSPC…) through the existing adapter. |
 | ETF full holdings (look-through) | SEC N-PORT filings | Free, monthly, all holdings with CUSIPs (VOO = 519 entries verified). Pain is trust→series→ticker mapping + CUSIP→ticker join (OpenFIGI free API). |
 | Bulk fundamentals (discovery) | **TradingView scanner (free, unofficial) — decided 2026-07-13** | Screening a universe from Yahoo is rate-limit-abusive and fragile — don't. Scout ships on the TV scanner behind a `Screener` protocol; paid options below remain the upgrade path (July 2026 prices): |

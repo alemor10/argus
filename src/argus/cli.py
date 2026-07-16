@@ -183,6 +183,12 @@ series:
 # triggers a delivery and never enters the gated store. Empty list turns the
 # section off.
 bellwethers: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, TSLA, BRK-B, JPM]
+
+# Well-known ETFs to watch for rebalancing — Argus snapshots each one's daily
+# holdings (SSGA/SPDR feed) and reports when constituents are added or dropped
+# (an index add is forced buying). SPDR funds only for now: SPY (S&P 500), DIA
+# (Dow), and the eleven sector SPDRs. Empty list turns the feature off.
+etfs: [SPY, DIA, XLK, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLB, XLRE, XLC]
 """
 
 CONSIDER_TEMPLATE = """\
@@ -370,6 +376,54 @@ def _market_wire_step(bellwethers: tuple[str, ...], deliver: "DeliverPolicy"):
     return step
 
 
+def _etf_step(etfs: tuple[str, ...]):
+    """before_digest hook on EVERY watch run (not just magazine ones — a
+    rebalance should page even a quiet events-only Monday). Snapshots each
+    ETF's membership and stores it ONLY when it changed since the last
+    snapshot; the rebalance is then the diff (computed at report time).
+    Per-ETF failures append a run note; the digest must always land."""
+    from argus.store import queries, writer
+
+    if not etfs:
+        return None
+
+    def step(con, run_id: int) -> None:
+        from argus.etf import SsgaHoldingsSource, membership_diff
+
+        source = SsgaHoldingsSource()
+        for etf in etfs:
+            symbol = etf.strip().upper()
+            try:
+                current = source.fetch(symbol)
+            except Exception as exc:
+                writer.append_run_note(
+                    con, run_id=run_id, note=f"etf holdings unavailable ({symbol}): {exc}"
+                )
+                continue
+            prior = queries.latest_etf_holdings(con, symbol, run_id)
+            if prior is None:  # first snapshot: baseline, stored but silent
+                writer.write_etf_holdings(con, run_id=run_id, etf=symbol, holdings=current)
+                continue
+            added, dropped = membership_diff(prior, current)
+            if added or dropped:  # store only on change — the change-log model
+                writer.write_etf_holdings(con, run_id=run_id, etf=symbol, holdings=current)
+
+    return step
+
+
+def _compose_before_digest(*steps):
+    """Run several before_digest hooks in order (engine takes one)."""
+    live = [s for s in steps if s is not None]
+    if not live:
+        return None
+
+    def run(con, run_id: int) -> None:
+        for step in live:
+            step(con, run_id)
+
+    return run
+
+
 def _build_sources(fred_series: dict[str, str] | None = None) -> list[DataSource]:
     secrets = resolve_secrets()
     sources: list[DataSource] = [YahooSource()]
@@ -473,7 +527,10 @@ def watch(
             app_version=argus.__version__,
             artifact_builder=_pdf_artifact_builder(),
             gated_sink=gated_sink,
-            before_digest=_market_wire_step(macro_config.bellwethers, deliver),
+            before_digest=_compose_before_digest(
+                _market_wire_step(macro_config.bellwethers, deliver),
+                _etf_step(macro_config.etfs),
+            ),
         )
     finally:
         con.close()

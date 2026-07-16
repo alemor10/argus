@@ -179,6 +179,18 @@ CREATE TABLE market_wire (
     payload TEXT    NOT NULL
 ) WITHOUT ROWID;
 
+-- Well-known ETF membership snapshots (v1.14) — one holdings blob per
+-- (run, etf), stored ONLY when membership changes (the analyst_actions
+-- first-seen philosophy; most days nothing lands). A rebalance is the diff
+-- of this run's blob against the prior stored one — reproducible for
+-- `report --run N`. Claims from the issuer's daily feed; never gated.
+CREATE TABLE etf_holdings (
+    run_id   INTEGER NOT NULL REFERENCES runs(run_id),
+    etf      TEXT    NOT NULL,
+    holdings TEXT    NOT NULL,   -- JSON [{t: ticker, w: weight, n: name}, ...]
+    PRIMARY KEY (run_id, etf)
+) WITHOUT ROWID;
+
 -- Scout self-scoring — an immutable forward log ("grade the grader"). On each
 -- scout run, every name scout has EVER proposed is scored: total return since
 -- it first surfaced vs SPY over the same window. Persisted per scoring run so

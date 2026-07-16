@@ -663,6 +663,8 @@ def _watch_news(fig: Figure, cur: _Cursor, report: RunReport, history: History) 
     radar_lines = _radar_pdf_lines(report)
     if radar_lines:
         _block(cur, "Radar", radar_lines, 22)
+    if report.etf_rebalances:
+        _block(cur, "ETF rebalancing (ssga, unverified)", _etf_rebalance_pdf_lines(report), 16)
     bellwether_lines = _bellwether_pdf_lines(report)
     if bellwether_lines:
         _block(cur, "Bellwether earnings (finnhub, unverified)", bellwether_lines,
@@ -897,6 +899,18 @@ def _movers_chart(fig: Figure, cur: _Cursor, wire) -> None:
             fontsize=6.5, color=_SECONDARY,
         )
     cur.gap(height + 0.014)
+
+
+def _etf_rebalance_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
+    """Constituent adds (green) / drops (red) per changed ETF — forced-flow
+    signal, claims-labeled."""
+    lines: list[tuple[str, str]] = []
+    for r in report.etf_rebalances:
+        if r.added:
+            lines.append((_clip(f"{r.etf} added: {', '.join(r.added)}", 118), _UP))
+        if r.dropped:
+            lines.append((_clip(f"{r.etf} dropped: {', '.join(r.dropped)}", 118), _CRITICAL))
+    return lines
 
 
 def _radar_pdf_lines(report: RunReport) -> list[tuple[str, str]]:

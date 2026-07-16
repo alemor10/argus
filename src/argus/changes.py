@@ -333,6 +333,8 @@ def has_new_information(report: "RunReport") -> bool:
     breached, an earnings date still in its reminder window). A ticker going
     dark (status failed) is news too. Deliberately generous — the failure
     mode of gating is silence, so anything ambiguous delivers."""
+    if report.etf_rebalances:  # a well-known ETF changed constituents — forced-flow news
+        return True
     for ticker in report.tickers:
         if ticker.status == "failed":
             return True

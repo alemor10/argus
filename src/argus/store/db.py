@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS market_wire (
     8: lambda con: _add_column_if_absent(
         con, "run_tickers", "tier", "TEXT NOT NULL DEFAULT 'watch'"
     ),
+    # v1.14: ETF membership snapshots — one blob per (run, etf), on change.
+    9: """
+CREATE TABLE IF NOT EXISTS etf_holdings (
+    run_id   INTEGER NOT NULL REFERENCES runs(run_id),
+    etf      TEXT    NOT NULL,
+    holdings TEXT    NOT NULL,
+    PRIMARY KEY (run_id, etf)
+) WITHOUT ROWID;
+""",
 }
 
 

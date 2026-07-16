@@ -526,6 +526,30 @@ def test_consider_tier_round_trips(con):
     assert ticker.context.tier == "consider"
 
 
+def test_etf_rebalance_is_the_diff_of_snapshots(con):
+    from argus.models import EtfHolding
+
+    def holdings(*tickers):
+        return [EtfHolding(ticker=t, weight=1.0) for t in tickers]
+
+    # Run 1: first snapshot of SPY — baseline, no rebalance.
+    r1 = _begin(con, started_at=T0)
+    _write(con, r1)
+    writer.write_etf_holdings(con, run_id=r1, etf="SPY", holdings=holdings("A", "B", "C"))
+    writer.finish_run(con, run_id=r1, status="complete", finished_at=T0)
+    assert queries.run_report(con, r1).etf_rebalances == ()  # baseline, not news
+
+    # Run 2: membership changed — C dropped, D added.
+    r2 = _begin(con, started_at=T1)
+    _write(con, r2)
+    writer.write_etf_holdings(con, run_id=r2, etf="SPY", holdings=holdings("A", "B", "D"))
+    writer.finish_run(con, run_id=r2, status="complete", finished_at=T1)
+    [rebalance] = queries.run_report(con, r2).etf_rebalances
+    assert rebalance.etf == "SPY"
+    assert rebalance.added == ("D",)
+    assert rebalance.dropped == ("C",)
+
+
 # --- events + run_report ------------------------------------------------------
 
 

@@ -839,6 +839,26 @@ numbers; persisted inside the market_wire blob so issues reproduce. Digest
 section + a dedicated PDF page ("Worth reading about"). Argus curates by
 rule and never editorializes.
 
+## ETF rebalancing — v1.14
+
+Knowing a well-known ETF is rebalancing is forced-flow signal (an index add
+means index funds MUST buy), and it works whether or not you hold the ETF.
+`etf.py` fetches a configured set of ETFs' membership from the SSGA/SPDR
+daily-holdings xlsx (`macro.yaml`'s `etfs:` list — SPY, DIA, the 11 sector
+SPDRs), behind a `HoldingsSource` protocol (iShares/Vanguard/N-PORT slot in
+later). The feed gives tickers directly, so the CUSIP→ticker join that made
+N-PORT "the hardest data-eng piece" is skipped.
+
+Storage is a change-log, not a daily dump: a holdings blob is persisted only
+when membership changed since the last snapshot (schema v10, `etf_holdings`;
+the analyst-actions first-seen philosophy). A rebalance is the diff of this
+run's blob against the prior one, computed at report time (reproducible for
+`report --run N`); a first-ever snapshot is baseline, not news. The ETF step
+runs on EVERY watch run (not just magazine ones — a rebalance should page a
+quiet events-only Monday too) and feeds `has_new_information`. Holdings are
+CLAIMS: never gated, never observations; only the membership diff is an event.
+Rendered in `## ETF rebalancing`, shown only when something changed.
+
 ## The Sunday Edition — v1.10 (weekly recap)
 
 `argus recap` is the week in one PDF, aggregated ENTIRELY from the store —

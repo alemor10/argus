@@ -27,6 +27,7 @@ from argus.models import (
     ChangeEvent,
     CompanyProfile,
     EarningsResultRecord,
+    EtfHolding,
     GatedObservation,
     MarketWire,
     ParseFailure,
@@ -283,6 +284,20 @@ def write_market_wire(con: sqlite3.Connection, *, run_id: int, wire: "MarketWire
         con.execute(
             "INSERT OR REPLACE INTO market_wire (run_id, payload) VALUES (?, ?)",
             (run_id, wire.model_dump_json()),
+        )
+
+
+def write_etf_holdings(
+    con: sqlite3.Connection, *, run_id: int, etf: str, holdings: Sequence[EtfHolding]
+) -> None:
+    """Persist one ETF's membership snapshot for this run — the caller writes
+    only when membership changed, so the diff against the prior blob IS the
+    rebalance. OR REPLACE keeps a retried step idempotent."""
+    payload = json.dumps([{"t": h.ticker, "w": h.weight, "n": h.name} for h in holdings])
+    with con:
+        con.execute(
+            "INSERT OR REPLACE INTO etf_holdings (run_id, etf, holdings) VALUES (?, ?, ?)",
+            (run_id, etf, payload),
         )
 
 

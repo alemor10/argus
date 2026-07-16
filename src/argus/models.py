@@ -697,6 +697,31 @@ class MarketWire(BaseModel):
     features: tuple[FeatureCard, ...] = ()  # the issue's reading material (claims)
 
 
+class EtfHolding(BaseModel):
+    """One constituent of a watched ETF — the issuer's daily-holdings claim
+    (ticker + weight), never gated. Persisted as a membership snapshot so
+    rebalances (adds/drops) are a diff of two snapshots."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    weight: float = 0.0  # percent, as the issuer reports
+    name: str | None = None
+
+
+class EtfRebalance(BaseModel):
+    """One ETF's membership change since its last stored snapshot: the
+    constituents added and dropped. Derived at report time from the stored
+    holdings blobs, so `report --run N` reproduces it. A constituent ADD to a
+    well-known index ETF is forced-buying signal; a DROP the reverse."""
+
+    model_config = ConfigDict(frozen=True)
+
+    etf: str
+    added: tuple[str, ...] = ()
+    dropped: tuple[str, ...] = ()
+
+
 class ScorecardMark(BaseModel):
     """One name's realized standing as of a scoring run — total return since
     scout first proposed it, vs SPY over the same window. Immutable once
@@ -801,3 +826,4 @@ class RunReport(BaseModel):
     bellwethers: tuple[BellwetherEarning, ...] = ()  # pre-v1.9 runs' market context (claims)
     market: MarketWire | None = None  # the magazine issue's market pages (claims)
     radar: tuple[ScoutProposal, ...] = ()  # latest scout shortlist (watch runs; claims+gated)
+    etf_rebalances: tuple[EtfRebalance, ...] = ()  # well-known ETF membership changes (claims)
