@@ -149,6 +149,40 @@ class TestEarningsWire:
         assert wire.earnings_more_upcoming == 4
 
 
+class TestFeatureSelection:
+    def test_mechanical_picks_top_mover_each_way_and_largest_reporter(self):
+        from argus.market import select_features
+
+        rows = [
+            _row("UP", change=8.0), _row("DOWN", change=-9.0),
+            _row("BIGREP", cap=9e11), _row("SMALLREP", cap=2e10),
+        ]
+        calendar = [
+            BellwetherEarning(symbol="BIGREP", report_date=TODAY, hour="amc", eps_estimate=2.0),
+            BellwetherEarning(symbol="SMALLREP", report_date=TODAY, eps_estimate=1.0),
+        ]
+        wire = build_wire(rows, calendar, today=TODAY)
+        picks = select_features(wire)
+        assert [symbol for symbol, _why in picks] == ["UP", "DOWN", "BIGREP"]
+        assert "biggest large-cap gainer: +8.0%" in picks[0][1]
+        assert "Largest company reporting next" in picks[2][1]
+
+    def test_dedupe_and_flat_day(self):
+        from argus.market import select_features
+
+        wire = build_wire([_row("A", change=0.0)], (), today=TODAY)
+        assert select_features(wire) == []
+
+    def test_feature_card_degrades_without_network(self, monkeypatch):
+        import sys
+        from argus.market import fetch_feature_card
+
+        monkeypatch.setitem(sys.modules, "yfinance", None)  # import fails → wire numbers only
+        row = _row("UP", change=8.0, close=50.0)
+        card = fetch_feature_card("UP", "why line", {"UP": row})
+        assert card.symbol == "UP" and card.close == 50.0 and card.summary is None
+
+
 def test_wire_round_trips_through_json():
     """The store persists the wire as one JSON blob — it must round-trip."""
     wire = build_wire(

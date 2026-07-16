@@ -91,6 +91,11 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       `promote` graduates; consider.yaml is machine-managed). Fixes: calendar
       duplicate rows deduped (conservative surprise), honest "not consulted"
       health wording, same-day Δ label. See ARCHITECTURE.md, The Radar.
+- [x] Featured stocks (v1.12, 2026-07-16): each Daily carries up to three
+      "Worth reading about" cards — business summary, sector/size, claimed
+      numbers — picked by disclosed mechanical rules (top mover each way,
+      largest upcoming reporter). Claims-labeled; prose verbatim; ~3 extra
+      fetches per issue; persisted in the wire blob.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

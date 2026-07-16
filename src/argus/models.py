@@ -644,10 +644,31 @@ class EarningsWireEntry(BellwetherEarning):
     market_cap: float | None = None
 
 
+class FeatureCard(BaseModel):
+    """One featured stock — the Daily's reading material. Selection is
+    mechanical (see market.select_features); the business summary is the
+    source's prose rendered verbatim (the company_profiles precedent — not
+    gate-material), and every number on the card is a labeled claim."""
+
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    why: str  # the disclosed mechanical reason it was featured
+    name: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    employees: int | None = None
+    summary: str | None = None
+    close: float | None = None
+    change_pct: float | None = None
+    market_cap: float | None = None
+    fwd_pe: float | None = None
+
+
 class MarketWire(BaseModel):
     """One issue's market pages — movers, sector pulse, earnings wire,
-    52-week extremes. Absent (None on RunReport) for quiet pulses and old
-    runs; the digest renders the sections only when present."""
+    52-week extremes, featured cards. Absent (None on RunReport) for quiet
+    pulses and old runs; the digest renders the sections only when present."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -660,6 +681,7 @@ class MarketWire(BaseModel):
     earnings_reported: tuple[EarningsWireEntry, ...] = ()
     earnings_upcoming: tuple[EarningsWireEntry, ...] = ()
     earnings_more_upcoming: int = 0  # large-cap reporters beyond the shown cap
+    features: tuple[FeatureCard, ...] = ()  # the issue's reading material (claims)
 
 
 class ScorecardMark(BaseModel):

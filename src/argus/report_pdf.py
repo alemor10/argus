@@ -213,6 +213,8 @@ def build_pdf(
             # then the per-ticker detail pages.
             if report.market is not None:
                 _save(pdf, _market_wire_page(report))
+                if report.market.features:
+                    _save(pdf, _featured_page(report))
             _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
@@ -989,6 +991,49 @@ def _extremes_pdf_lines(wire) -> list[tuple[str, str]]:
             name = f" — {e.company}" if e.company else ""
             lines.append((_clip(f"   {e.symbol} {e.close:.2f}{name}", 114), tone))
     return lines
+
+
+def _featured_page(report: RunReport) -> Figure:
+    """Worth reading about: the featured cards — who the companies are, why
+    they surfaced (mechanical rules), and their claimed numbers."""
+    fig = plt.figure(figsize=_PAGE)
+    cur = _Cursor(fig)
+    cur.line("Worth reading about", size=13, weight="bold")
+    cur.gap(0.006)
+    cur.line(
+        "Selection is mechanical — top mover each way, largest upcoming reporter. "
+        "All numbers are yahoo claims, unverified.",
+        size=8, color=_MUTED, style="italic",
+    )
+    cur.gap(0.014)
+    wire = report.market
+    assert wire is not None
+    for card in wire.features:
+        if cur.y < _PAGE_FLOOR + 0.10:
+            break
+        title = card.symbol + (f" — {card.name}" if card.name else "")
+        cur.line(_clip(title, 90), size=11.5, weight="bold")
+        cur.gap(0.002)
+        cur.line(card.why + ".", size=8.5, color=_SECONDARY, style="italic")
+        facts = []
+        if card.sector:
+            facts.append(card.sector + (f" · {card.industry}" if card.industry else ""))
+        if card.market_cap:
+            facts.append(f"cap {_humanize_cap(card.market_cap)}")
+        if card.close is not None:
+            facts.append(f"close {card.close:,.2f}")
+        if card.fwd_pe:
+            facts.append(f"fwd P/E {card.fwd_pe:.1f}")
+        if card.employees:
+            facts.append(f"{card.employees:,} employees")
+        if facts:
+            cur.line("  ·  ".join(facts), size=8.5, color=_INK)
+        if card.summary:
+            cur.gap(0.004)
+            cur.wrapped(card.summary, size=8.5, color=_SECONDARY, width=110, max_lines=7)
+        cur.gap(0.022)
+    _page_footer(fig, report)
+    return fig
 
 
 def _sorted_watch_then_macro(report: RunReport) -> list[TickerReport]:

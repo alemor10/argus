@@ -484,6 +484,33 @@ class TestMarketWireSections:
         assert "Sector pulse" not in out
 
 
+class TestFeaturedSection:
+    def test_cards_render_with_disclosed_selection(self):
+        from argus.models import FeatureCard, MarketWire
+
+        wire = MarketWire(
+            universe=100,
+            features=(
+                FeatureCard(
+                    symbol="ABT", why="Yesterday's biggest large-cap gainer: +11.3% to 98.79",
+                    name="Abbott Laboratories", sector="Healthcare", industry="Medical Devices",
+                    employees=114000, market_cap=1.7e11, fwd_pe=22.4,
+                    summary="Abbott Laboratories discovers, develops, and sells health care products.",
+                ),
+            ),
+        )
+        report = RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(_quiet_ticker(),), market=wire,
+        )
+        out = render(report)
+        assert "### ABT — Abbott Laboratories" in out
+        assert "_Yesterday's biggest large-cap gainer: +11.3% to 98.79._" in out
+        assert "- Healthcare · Medical Devices · cap 170.0B · fwd P/E 22.4 · 114,000 employees" in out
+        assert "Abbott Laboratories discovers" in out
+        assert "Selection is mechanical" in out
+
+
 class TestQuarantineTable:
     def test_lists_quarantine_coexisting_with_accepted_primary(self):
         """Snapshot.quarantined only carries fields that went fully dark; the

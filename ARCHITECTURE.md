@@ -827,6 +827,18 @@ diverging bar charts for sector pulse and movers, colored earnings wire, and
 a page-floor guard so no list can ever run into the footer (truncation is
 always disclosed; the markdown record is complete).
 
+## Featured stocks — v1.12
+
+Each Daily's reading material: up to three FeatureCards (who the company IS
+— the source's business summary rendered verbatim, the company_profiles
+precedent — plus sector/industry/size and claimed numbers), selected by
+DISCLOSED mechanical rules in market.select_features: yesterday's biggest
+large-cap gainer, biggest loser, and the largest company reporting next.
+Three extra info fetches per issue, failure-degrading to the wire's own
+numbers; persisted inside the market_wire blob so issues reproduce. Digest
+section + a dedicated PDF page ("Worth reading about"). Argus curates by
+rule and never editorializes.
+
 ## The Sunday Edition — v1.10 (weekly recap)
 
 `argus recap` is the week in one PDF, aggregated ENTIRELY from the store —

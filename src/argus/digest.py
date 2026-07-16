@@ -114,6 +114,8 @@ def render(report: RunReport) -> str:
                 _earnings_wire_section(report.market),
                 _extremes_section(report.market),
             ]
+            if report.market.features:
+                parts.append(_featured_section(report.market))
         parts.append(_watchlist_section(watch))
         if report.bellwethers:
             parts.append(_bellwether_section(report))
@@ -669,6 +671,33 @@ def _extremes_section(wire: "MarketWire") -> list[str]:
         f"_Within {EXTREME_TOLERANCE:.1%} of the 52-week mark, caps ≥ "
         f"${MOVER_CAP_FLOOR / 1e9:.0f}B._"
     )
+    return lines
+
+
+def _featured_section(wire: MarketWire) -> list[str]:
+    """The issue's reading material: who the featured companies ARE. Picked
+    by disclosed mechanical rules, prose rendered verbatim, numbers labeled
+    claims — Argus curates by rule and never editorializes."""
+    lines = ["## Featured (yahoo, unverified)", ""]
+    for card in wire.features:
+        title = f"### {card.symbol}" + (f" — {card.name}" if card.name else "")
+        lines += [title, ""]
+        lines.append(f"_{card.why}._")
+        facts = []
+        if card.sector:
+            facts.append(card.sector + (f" · {card.industry}" if card.industry else ""))
+        if card.market_cap:
+            facts.append(f"cap {_humanize_cap(card.market_cap)}")
+        if card.fwd_pe:
+            facts.append(f"fwd P/E {card.fwd_pe:.1f}")
+        if card.employees:
+            facts.append(f"{card.employees:,} employees")
+        if facts:
+            lines += ["", "- " + " · ".join(facts)]
+        if card.summary:
+            lines += ["", card.summary]
+        lines.append("")
+    lines.append("_Selection is mechanical (top mover each way, largest upcoming reporter)._")
     return lines
 
 

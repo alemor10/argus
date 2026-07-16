@@ -31,6 +31,7 @@ from argus.models import (
     BellwetherEarning,
     EarningsWireEntry,
     Extreme,
+    FeatureCard,
     MarketWire,
     Mover,
     SectorPulse,
@@ -279,6 +280,77 @@ def _earnings_wire(
     upcoming.sort(key=lambda e: (-(e.market_cap or 0), e.report_date, e.symbol))
     more = max(len(upcoming) - EARNINGS_UPCOMING_SHOWN, 0)
     return reported[:EARNINGS_REPORTED_SHOWN], upcoming[:EARNINGS_UPCOMING_SHOWN], more
+
+
+def select_features(wire: MarketWire) -> list[tuple[str, str]]:
+    """The issue's reading material, picked by DISCLOSED mechanical rules —
+    never judgment: yesterday's biggest large-cap gainer, biggest loser, and
+    the largest company reporting today. Returns (symbol, why) pairs,
+    deduped, at most three."""
+    picks: list[tuple[str, str]] = []
+    if wire.gainers:
+        m = wire.gainers[0]
+        picks.append(
+            (m.symbol, f"Yesterday's biggest large-cap gainer: {m.change_pct:+.1f}% to {m.close:.2f}")
+        )
+    if wire.losers:
+        m = wire.losers[0]
+        picks.append(
+            (m.symbol, f"Yesterday's biggest large-cap loser: {m.change_pct:+.1f}% to {m.close:.2f}")
+        )
+    reporters = [e for e in wire.earnings_upcoming if e.market_cap is not None]
+    if reporters:
+        top = max(reporters, key=lambda e: e.market_cap)
+        when = top.report_date.isoformat() + (f" {top.hour}" if top.hour else "")
+        why = f"Largest company reporting next: {when}"
+        if top.eps_estimate is not None:
+            why += f", street at {top.eps_estimate:.2f}"
+        picks.append((top.symbol, why))
+    seen: set[str] = set()
+    unique = []
+    for symbol, why in picks:
+        if symbol.upper() not in seen:
+            seen.add(symbol.upper())
+            unique.append((symbol, why))
+    return unique[:3]
+
+
+def fetch_feature_card(symbol: str, why: str, rows_by_symbol: Mapping[str, MarketRow]) -> FeatureCard:
+    """One yfinance info fetch → a claims-labeled card. Network-side (called
+    from the wire step); any failure degrades to a card with the wire's own
+    numbers — the issue never blocks on a profile."""
+    row = rows_by_symbol.get(symbol.upper())
+    card = FeatureCard(
+        symbol=symbol,
+        why=why,
+        name=row.company if row else None,
+        sector=row.sector if row else None,
+        close=row.close if row else None,
+        change_pct=row.change_pct if row else None,
+        market_cap=row.market_cap if row else None,
+    )
+    try:
+        import yfinance
+
+        info = dict(yfinance.Ticker(symbol).info or {})
+    except Exception:
+        return card
+
+    def text(key: str) -> str | None:
+        raw = info.get(key)
+        return raw if isinstance(raw, str) and raw.strip() else None
+
+    employees = info.get("fullTimeEmployees")
+    return card.model_copy(
+        update={
+            "name": text("longName") or text("shortName") or card.name,
+            "sector": text("sector") or card.sector,
+            "industry": text("industry"),
+            "employees": employees if isinstance(employees, int) and employees > 0 else None,
+            "summary": (text("longBusinessSummary") or "")[:900] or None,
+            "fwd_pe": _num(info.get("forwardPE")),
+        }
+    )
 
 
 def _abs_surprise(entry: EarningsWireEntry) -> float:

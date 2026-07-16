@@ -332,7 +332,7 @@ def _market_wire_step(bellwethers: tuple[str, ...], deliver: "DeliverPolicy"):
     pins = frozenset(symbol.strip().upper() for symbol in bellwethers)
 
     def step(con, run_id: int) -> None:
-        from argus.market import MarketScanner, build_wire
+        from argus.market import MarketScanner, build_wire, fetch_feature_card, select_features
 
         today = date.today()
         try:
@@ -351,6 +351,12 @@ def _market_wire_step(bellwethers: tuple[str, ...], deliver: "DeliverPolicy"):
                     con, run_id=run_id, note=f"earnings calendar unavailable: {exc}"
                 )
         wire = build_wire(rows, calendar, pins=pins, today=today)
+        rows_by_symbol = {row.symbol.upper(): row for row in rows}
+        cards = tuple(
+            fetch_feature_card(symbol, why, rows_by_symbol)
+            for symbol, why in select_features(wire)
+        )
+        wire = wire.model_copy(update={"features": cards})
         writer.write_market_wire(con, run_id=run_id, wire=wire)
 
     return step
