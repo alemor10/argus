@@ -25,6 +25,7 @@ from argus.models import (
     AnalystActionRecord,
     ChangeEvent,
     CompanyProfile,
+    EarningsResultRecord,
     GatedObservation,
     ParseFailure,
     ScorecardMark,
@@ -90,10 +91,11 @@ def write_ticker_result(
     status: Literal["ok", "partial", "failed"],
     error: str | None = None,
     company_profile: CompanyProfile | None = None,
+    earnings: Sequence[EarningsResultRecord] = (),
 ) -> None:
     """ONE transaction: observations (accepted AND quarantined), analyst
-    actions (INSERT OR IGNORE, first_seen_run_id=run_id), run_sources rows,
-    run_tickers row — including context.thesis and
+    actions and earnings results (INSERT OR IGNORE, first_seen_run_id=run_id),
+    run_sources rows, run_tickers row — including context.thesis and
     context.thresholds.model_dump_json(), so run_report regenerates digests
     from SQL alone even after the watchlist changes."""
     with con:
@@ -135,6 +137,25 @@ def write_ticker_result(
                     a.to_grade,
                     a.source.value,
                     a.fetched_at.isoformat(),
+                    run_id,
+                ),
+            )
+        for e in earnings:
+            # OR IGNORE on (ticker, quarter_end): a re-served history keeps its
+            # original fetched_at and first_seen_run_id, and a later revision
+            # of an actual never rewrites what Argus first reported.
+            con.execute(
+                """INSERT OR IGNORE INTO earnings_results
+                     (ticker, quarter_end, eps_actual, eps_estimate,
+                      source, fetched_at, first_seen_run_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    e.ticker,
+                    e.quarter_end.isoformat(),
+                    e.eps_actual,
+                    e.eps_estimate,
+                    e.source.value,
+                    e.fetched_at.isoformat(),
                     run_id,
                 ),
             )

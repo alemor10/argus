@@ -14,6 +14,7 @@ from argus.models import (
     CHANGE_EVENT_ADAPTER,
     AnalystActionRecord,
     CompanyProfile,
+    EarningsResultRecord,
     FieldValue,
     QuarantinedObservation,
     QuarantineHit,
@@ -128,6 +129,23 @@ def new_analyst_actions(
         (ticker, run_id),
     ).fetchall()
     return [AnalystActionRecord.model_validate(dict(row)) for row in rows]
+
+
+def new_earnings_results(
+    con: sqlite3.Connection, run_id: int, ticker: str
+) -> list[EarningsResultRecord]:
+    """Reported quarters first seen in this run — exactly changes.detect's
+    new_earnings input: SELECT … FROM earnings_results WHERE ticker = ? AND
+    first_seen_run_id = ?. Set membership, no window arithmetic (the
+    analyst_actions precedent)."""
+    rows = con.execute(
+        """SELECT ticker, quarter_end, eps_actual, eps_estimate, source, fetched_at
+           FROM earnings_results
+           WHERE ticker = ? AND first_seen_run_id = ?
+           ORDER BY quarter_end""",
+        (ticker, run_id),
+    ).fetchall()
+    return [EarningsResultRecord.model_validate(dict(row)) for row in rows]
 
 
 def quarantine_report(con: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]:

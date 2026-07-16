@@ -251,6 +251,27 @@ class AnalystActionRecord(BaseModel):
     fetched_at: AwareDatetime
 
 
+class EarningsResultRecord(BaseModel):
+    """Event-shaped source data: one REPORTED quarter — the realized EPS
+    beside the street's estimate at report time. A scheduled future quarter
+    has no actual and is not a result; only actual-bearing rows become
+    records. Stored in its own table (analyst_actions precedent) with
+    INSERT OR IGNORE on the natural key + first_seen_run_id, so "reported
+    since last run" is a set-membership fact, crash-correct by construction.
+    Non-finite EPS values are rejected at construction — NaN binds as NULL
+    in SQLite and would violate the table's NOT NULL, rolling back the
+    whole ticker."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    quarter_end: date  # fiscal quarter end — the natural key with ticker
+    eps_actual: float = PydanticField(allow_inf_nan=False)
+    eps_estimate: float | None = PydanticField(default=None, allow_inf_nan=False)
+    source: Source
+    fetched_at: AwareDatetime
+
+
 class CompanyProfile(BaseModel):
     """Descriptive identity — what the business IS. Provenance-stamped like
     everything else, but not gate-material: there are no plausibility bounds
@@ -324,6 +345,21 @@ class AnalystAction(_Event):
     action_date: date
 
 
+class EarningsReported(_Event):
+    """A quarter's results landed since the last run: realized EPS beside the
+    street's estimate at report time. Realized data reported against a line
+    third parties drew — never Argus's own forecast. `surprise_pct` is
+    computed from the two stored facts at detect time ((actual − estimate) /
+    |estimate| · 100); None when there is no estimate to be surprised
+    against, or the estimate is zero (the division is undefined)."""
+
+    kind: Literal["earnings_reported"] = "earnings_reported"
+    quarter_end: date
+    eps_actual: float
+    eps_estimate: float | None = None
+    surprise_pct: float | None = None
+
+
 class EarningsImminent(_Event):
     kind: Literal["earnings_imminent"] = "earnings_imminent"
     earnings_date: date
@@ -362,6 +398,7 @@ ChangeEvent = Annotated[
     | TargetMove
     | ConsensusShift
     | AnalystAction
+    | EarningsReported
     | EarningsImminent
     | FieldQuarantined
     | FieldRecovered,

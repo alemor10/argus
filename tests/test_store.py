@@ -47,7 +47,8 @@ def test_migrate_is_idempotent(tmp_path):
     migrate(con)
     assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    assert {"runs", "run_tickers", "run_sources", "observations", "analyst_actions", "change_events"} <= tables
+    assert {"runs", "run_tickers", "run_sources", "observations", "analyst_actions",
+            "earnings_results", "change_events"} <= tables
     con.close()
 
 
@@ -107,6 +108,32 @@ def test_migrate_upgrades_older_databases_stepwise(tmp_path):
     tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
     assert "company_profiles" in tables
     con.close()
+
+
+def test_migrate_v5_adds_earnings_results(tmp_path):
+    """The deployed box sits at v5 (scorecard_marks); the v1.6 step must add
+    earnings_results in place."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    con.execute("DROP TABLE earnings_results")  # recreate a v5-shaped database
+    con.execute("PRAGMA user_version = 5")
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "earnings_results" in tables
+    con.close()
+
+
+def test_earnings_results_dedup_on_natural_key(con):
+    insert = """INSERT OR IGNORE INTO earnings_results
+        (ticker, quarter_end, eps_actual, eps_estimate, source, fetched_at, first_seen_run_id)
+        VALUES ('NVDA', '2026-04-26', ?, 0.75, 'yahoo', ?, 1)"""
+    con.execute(insert, (0.81, "2026-07-12T14:00:00Z"))
+    con.execute(insert, (0.82, "2026-07-19T14:00:00Z"))  # re-fetched (revised): ignored
+    rows = con.execute("SELECT eps_actual, first_seen_run_id FROM earnings_results").fetchall()
+    assert len(rows) == 1
+    assert rows[0]["eps_actual"] == 0.81  # first write wins — never revised
+    assert rows[0]["first_seen_run_id"] == 1
 
 
 def test_verdict_is_mandatory_and_constrained(con):

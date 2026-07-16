@@ -11,6 +11,7 @@ import pytest
 from argus.fields import Field, QuarantineCode, Source
 from argus.models import (
     AnalystActionRecord,
+    EarningsResultRecord,
     FieldQuarantined,
     GatedObservation,
     ParseFailure,
@@ -70,12 +71,13 @@ def _begin(con, *, started_at=T1, kind="watch"):
     return writer.begin_run(con, kind=kind, started_at=started_at, app_version="test")
 
 
-def _write(con, run_id, *, ticker="NVDA", gated=(), actions=(), health=(), status="ok",
-           error=None, thesis=None, thresholds=Thresholds()):
+def _write(con, run_id, *, ticker="NVDA", gated=(), actions=(), earnings=(), health=(),
+           status="ok", error=None, thesis=None, thresholds=Thresholds()):
     writer.write_ticker_result(
         con, run_id=run_id,
         context=TickerContext(ticker=ticker, thesis=thesis, thresholds=thresholds),
-        gated=gated, actions=actions, source_health=health, status=status, error=error,
+        gated=gated, actions=actions, earnings=earnings, source_health=health,
+        status=status, error=error,
     )
 
 
@@ -348,6 +350,45 @@ def test_analyst_action_dedup_across_runs_preserves_first_seen(con):
     assert queries.new_analyst_actions(con, r1, "NVDA") == [downgrade]
     # only the genuinely new actions belong to r2, ordered by (action_date, firm)
     assert queries.new_analyst_actions(con, r2, "NVDA") == [argus_research, baird]
+
+
+# --- earnings results ----------------------------------------------------------
+
+
+def test_earnings_result_dedup_across_runs_preserves_first_seen(con):
+    q1 = EarningsResultRecord(
+        ticker="NVDA", quarter_end=date(2026, 4, 26), eps_actual=0.81, eps_estimate=0.75,
+        source=Source.YAHOO, fetched_at=T0,
+    )
+    r1 = _begin(con, started_at=T0)
+    _write(con, r1, earnings=[q1])
+    writer.finish_run(con, run_id=r1, status="complete", finished_at=T0)
+
+    # next week the source re-serves the same quarter (with a REVISED actual,
+    # which must not rewrite the immutable first-seen row) beside a new one
+    r2 = _begin(con, started_at=T1)
+    revised = q1.model_copy(update={"fetched_at": T1, "eps_actual": 0.82})
+    q2 = EarningsResultRecord(
+        ticker="NVDA", quarter_end=date(2026, 7, 26), eps_actual=1.05, eps_estimate=0.93,
+        source=Source.YAHOO, fetched_at=T1,
+    )
+    _write(con, r2, earnings=[revised, q2])
+
+    # the refetch was ignored: run-1 provenance AND the first-reported actual survive
+    assert queries.new_earnings_results(con, r1, "NVDA") == [q1]
+    assert queries.new_earnings_results(con, r2, "NVDA") == [q2]
+
+
+def test_earnings_results_query_is_per_ticker(con):
+    r1 = _begin(con, started_at=T1)
+    nvda = EarningsResultRecord(
+        ticker="NVDA", quarter_end=date(2026, 6, 30), eps_actual=1.05,
+        source=Source.YAHOO, fetched_at=T1,
+    )
+    _write(con, r1, ticker="NVDA", earnings=[nvda])
+    assert queries.new_earnings_results(con, r1, "NVDA") == [nvda]
+    assert nvda.eps_estimate is None  # optional estimate round-trips as NULL → None
+    assert queries.new_earnings_results(con, r1, "NTDOY") == []
 
 
 # --- events + run_report ------------------------------------------------------

@@ -58,8 +58,8 @@ src/argus/
 │                        #   GatedObservation, Snapshot, TickerContext, ChangeEvent union, RunReport
 ├── gates.py             # PURE. Fixed pipeline: unary → staleness → cross-source → relational,
 │                        #   then primary resolution. The only constructor of GatedObservation.
-├── changes.py           # PURE. (baseline, current, thresholds, new analyst actions, today)
-│                        #   → list[ChangeEvent]
+├── changes.py           # PURE. (baseline, current, thresholds, new analyst actions,
+│                        #   new earnings results, today) → list[ChangeEvent]
 ├── engine.py            # The one loop: fetch → gate → persist → diff → events → digest.
 │                        #   Takes list[TickerContext] — the seam scout reuses. Only module
 │                        #   that touches sources, gates, and store together.
@@ -194,9 +194,10 @@ class Thresholds(BaseModel):
 Change events are a discriminated union (`kind` tag) so the renderer
 pattern-matches exhaustively and the `change_events` table round-trips them
 losslessly: `PriceMove`, `TargetMove`, `ConsensusShift`, `AnalystAction`
-(per-firm dated upgrade/downgrade), `EarningsImminent`, `FieldQuarantined`,
-`FieldRecovered`. Numeric move events carry `old_as_of` — the baseline's
-timestamp — so gap-spanning comparisons are printed honestly
+(per-firm dated upgrade/downgrade), `EarningsReported` (realized EPS vs the
+street estimate, once a quarter's results land), `EarningsImminent`,
+`FieldQuarantined`, `FieldRecovered`. Numeric move events carry `old_as_of` —
+the baseline's timestamp — so gap-spanning comparisons are printed honestly
 ("−12% vs 2026-06-28").
 
 ## SQLite schema
@@ -306,6 +307,22 @@ CREATE TABLE analyst_actions (
     PRIMARY KEY (ticker, action_date, firm, to_grade)
 ) WITHOUT ROWID;
 
+-- Same precedent, for reported quarters: realized EPS beside the street
+-- estimate at report time (yfinance earnings_history — the quoteSummary
+-- earningsHistory JSON module). Scheduled future quarters have no actual and
+-- never land here. First write wins: a later revision of an actual never
+-- rewrites what Argus first reported.
+CREATE TABLE earnings_results (
+    ticker            TEXT NOT NULL,
+    quarter_end       TEXT NOT NULL,      -- fiscal quarter end (ISO date)
+    eps_actual        REAL NOT NULL,
+    eps_estimate      REAL,               -- street consensus; NULL if none
+    source            TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL,
+    first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, quarter_end)
+) WITHOUT ROWID;
+
 -- Emitted events, persisted so `argus report --run N` regenerates any digest
 -- exactly and the digest never re-derives differently from what was reported.
 CREATE TABLE change_events (
@@ -326,6 +343,8 @@ Key reads (all in `store/queries.py`, hand-written SQL):
   and crashed runs are never diffed against.
 - **new_analyst_actions(run, ticker)** — rows with `first_seen_run_id =
   run`: exactly `changes.detect`'s `new_actions` input.
+- **new_earnings_results(run, ticker)** — same set-membership shape:
+  `changes.detect`'s `new_earnings` input.
 - **snapshot(run, ticker)** — primary accepted rows (`is_primary = 1`) plus
   quarantined-only fields → hydrates `Snapshot`.
 - **latest_accepted(ticker, field, before_run)** — fallback baseline so a
@@ -460,6 +479,15 @@ Absence of signal is never confusable with absence of data. Quarantine
   1,100 lines of 2012-era actions), and history at baseline time is
   baseline, not news — the rows are stored, so only genuinely new actions
   fire from the next run on.
+- **EarningsReported (v1.6)** — exactly the `earnings_results` rows with
+  `first_seen_run_id = current_run`: a quarter's results landed since the
+  last run. Realized EPS against the estimate third parties published —
+  never an Argus forecast, the same reported-data-vs-drawn-line kind as
+  everything else here. The surprise is computed from the two stored facts,
+  `(actual − estimate) / |estimate|` (None without an estimate, or at zero),
+  never taken from the source's own pre-scaled surprise figure. Same
+  first-run suppression as analyst actions: the feed hands over ~4 reported
+  quarters on a ticker's first run, which is baseline, not news.
 - **EarningsImminent** — state event, re-fires each run inside the window
   (at weekly cadence ≤2 reminders; suppression logic's failure mode is
   silence, the one thing this tool exists to prevent).
@@ -554,6 +582,9 @@ the point.
 | Crashed runs: committed data stays baseline-eligible; recovery is offered, not automatic | Exclude crashed runs from baselines | Excluding them would re-report stale diffs; instead the sweep returns the crashed run ids and the CLI points at `argus report --run N`, which renders the crashed run's already-persisted events. |
 | First-run analyst history is baseline, not news | Emit every first-seen action | The feed hands over its full dated history on a ticker's first run (1,100 lines observed live); suppressed then, set-membership from the next run on. |
 | Delivery failure exits 1 (unlike partial data, which exits 0) | Treat any produced digest as success | Partial data still reaches the reader with its degradation disclosed; a failed delivery sink on a headless box means the reader gets NOTHING — that is the silent-failure class this tool exists to prevent. The file copy still lands and the error names it. |
+| Earnings results from the quoteSummary `earningsHistory` JSON module | yfinance `earnings_dates` (long history + announcement dates) | `earnings_dates` HTML-scrapes the calendar page — the most breakage-prone fetch class — while `earningsHistory` rides the same JSON transport as `t.info`. Cost: the key is the fiscal quarter END (announcement dates aren't carried) and history is ~4 quarters — plenty, since only first-seen rows ever fire. |
+| Only actual-bearing rows become earnings records; quarter-end natural key, first write wins | Record scheduled quarters too; allow revisions to update | A scheduled quarter is not a result (EarningsImminent already covers anticipation), and it lands cleanly once its actual appears under the same key. Revisions never rewrite what Argus first reported — the same immutability contract as scorecard marks. |
+| Earnings surprise computed from stored estimate/actual | Trust the source's `surprisePercent` | Two facts with obvious units beat one pre-scaled figure whose unit convention must be guessed; the event also stays reproducible from its own payload. |
 
 ## Scout (discovery) — v1.1
 

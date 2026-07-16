@@ -11,6 +11,8 @@ from argus.models import (
     AnalystActionRecord,
     ConsensusShift,
     EarningsImminent,
+    EarningsReported,
+    EarningsResultRecord,
     FieldQuarantined,
     FieldRecovered,
     FieldValue,
@@ -52,8 +54,10 @@ def _never_called(field):
     raise AssertionError(f"latest_accepted must not be consulted (asked for {field})")
 
 
-def _detect(baseline, current, *, ctx=None, new_actions=(), today=TODAY, latest_accepted=_no_fallback):
-    return detect(baseline, current, ctx or _ctx(), new_actions, today, latest_accepted=latest_accepted)
+def _detect(baseline, current, *, ctx=None, new_actions=(), new_earnings=(), today=TODAY,
+            latest_accepted=_no_fallback):
+    return detect(baseline, current, ctx or _ctx(), new_actions, today,
+                  latest_accepted=latest_accepted, new_earnings=new_earnings)
 
 
 class TestPriceMove:
@@ -237,6 +241,54 @@ class TestAnalystActions:
         assert _detect(_snap(1), _snap(2), new_actions=[]) == []
 
 
+class TestEarningsReported:
+    def _record(self, actual, estimate, quarter=date(2026, 6, 30)):
+        return EarningsResultRecord(
+            ticker="NVDA", quarter_end=quarter, eps_actual=actual, eps_estimate=estimate,
+            source=Source.YAHOO, fetched_at=NOW,
+        )
+
+    def test_each_new_result_maps_field_for_field_with_computed_surprise(self):
+        events = _detect(_snap(1), _snap(2), new_earnings=[self._record(1.05, 0.93)])
+        assert events == [
+            EarningsReported(
+                ticker="NVDA", quarter_end=date(2026, 6, 30),
+                eps_actual=1.05, eps_estimate=0.93, surprise_pct=12.9,
+            )
+        ]
+
+    def test_miss_is_a_negative_surprise(self):
+        [event] = _detect(_snap(1), _snap(2), new_earnings=[self._record(0.80, 1.00)])
+        assert event.surprise_pct == -20.0
+
+    def test_beating_a_negative_estimate_is_a_positive_surprise(self):
+        """Loss smaller than feared: −0.50 against a −1.00 estimate is a beat,
+        and |estimate| in the denominator keeps its sign positive."""
+        [event] = _detect(_snap(1), _snap(2), new_earnings=[self._record(-0.50, -1.00)])
+        assert event.surprise_pct == 50.0
+
+    def test_no_estimate_reports_the_actual_without_a_surprise(self):
+        [event] = _detect(_snap(1), _snap(2), new_earnings=[self._record(1.05, None)])
+        assert event.eps_actual == 1.05
+        assert event.eps_estimate is None
+        assert event.surprise_pct is None
+
+    def test_zero_estimate_reports_without_a_surprise(self):
+        """The division is undefined at zero — the actual still reports."""
+        [event] = _detect(_snap(1), _snap(2), new_earnings=[self._record(0.10, 0.0)])
+        assert event.eps_estimate == 0.0
+        assert event.surprise_pct is None
+
+    def test_results_sort_by_quarter_end(self):
+        newer = self._record(1.05, 0.93, quarter=date(2026, 6, 30))
+        older = self._record(0.98, 1.00, quarter=date(2026, 3, 31))
+        events = _detect(_snap(1), _snap(2), new_earnings=[newer, older])
+        assert [e.quarter_end for e in events] == [date(2026, 3, 31), date(2026, 6, 30)]
+
+    def test_no_new_results_no_events(self):
+        assert _detect(_snap(1), _snap(2), new_earnings=[]) == []
+
+
 class TestEarningsImminent:
     def _events(self, earnings_date, ctx=None, baseline=_snap(1)):
         current = _snap(
@@ -315,10 +367,16 @@ class TestFieldQuarantined:
 
 
 class TestFirstRun:
-    """baseline=None: no diff events AND no analyst-action events — the
-    source's entire dated history is baseline then, not news (a real first
-    live run produced 1,100 lines of 2012-era actions). Only state events
-    (EarningsImminent) fire, and latest_accepted is never even consulted."""
+    """baseline=None: no diff events AND no analyst-action or earnings-
+    reported events — the source's entire dated history is baseline then, not
+    news (a real first live run produced 1,100 lines of 2012-era actions;
+    the earnings feed likewise hands over its reported quarters). Only state
+    events (EarningsImminent) fire, and latest_accepted is never consulted."""
+
+    FIRST_RUN_EARNINGS = EarningsResultRecord(
+        ticker="NVDA", quarter_end=date(2026, 4, 26), eps_actual=0.81, eps_estimate=0.75,
+        source=Source.YAHOO, fetched_at=NOW,
+    )
 
     def test_only_state_events_fire(self):
         current = _snap(
@@ -333,7 +391,11 @@ class TestFirstRun:
             quarantined={Field.ANALYST_TARGET_MEAN: (STALE_HIT,)},
         )
         events = _detect(
-            None, current, new_actions=[TestAnalystActions.RECORD], latest_accepted=_never_called
+            None,
+            current,
+            new_actions=[TestAnalystActions.RECORD],
+            new_earnings=[self.FIRST_RUN_EARNINGS],
+            latest_accepted=_never_called,
         )
         assert [e.kind for e in events] == ["earnings_imminent"]
 
@@ -344,6 +406,12 @@ class TestFirstRun:
         current = _snap(2, {Field.PRICE: _fv(Field.PRICE, 101.0, fetched_at=NOW)})
         events = _detect(baseline, current, new_actions=[TestAnalystActions.RECORD])
         assert [e.kind for e in events] == ["analyst_action"]
+
+    def test_second_run_emits_only_genuinely_new_earnings(self):
+        baseline = _snap(1, {Field.PRICE: _fv(Field.PRICE, 100.0)})
+        current = _snap(2, {Field.PRICE: _fv(Field.PRICE, 101.0, fetched_at=NOW)})
+        events = _detect(baseline, current, new_earnings=[self.FIRST_RUN_EARNINGS])
+        assert [e.kind for e in events] == ["earnings_reported"]
 
 
 class TestCanonicalOrdering:
@@ -386,7 +454,13 @@ class TestCanonicalOrdering:
                 action="init", to_grade="Overweight", source=Source.YAHOO, fetched_at=NOW,
             ),
         ]
-        events = _detect(baseline, current, new_actions=actions)
+        earnings = [
+            EarningsResultRecord(
+                ticker="NVDA", quarter_end=date(2026, 6, 30), eps_actual=1.05,
+                eps_estimate=0.93, source=Source.YAHOO, fetched_at=NOW,
+            ),
+        ]
+        events = _detect(baseline, current, new_actions=actions, new_earnings=earnings)
         assert [e.kind for e in events] == [
             "price_move",
             "target_move",
@@ -394,6 +468,7 @@ class TestCanonicalOrdering:
             "analyst_action",
             "analyst_action",
             "analyst_action",
+            "earnings_reported",
             "earnings_imminent",
             "field_quarantined",
             "field_quarantined",
@@ -406,5 +481,5 @@ class TestCanonicalOrdering:
             (date(2026, 7, 11), "Morgan Stanley"),
         ]
         # Quarantine transitions sub-sorted by field.
-        assert [e.field for e in events[7:9]] == [Field.DEBT_TO_EQUITY, Field.PE_TTM]
-        assert events[9] == FieldRecovered(ticker="NVDA", field=Field.GROSS_MARGIN)
+        assert [e.field for e in events[8:10]] == [Field.DEBT_TO_EQUITY, Field.PE_TTM]
+        assert events[10] == FieldRecovered(ticker="NVDA", field=Field.GROSS_MARGIN)

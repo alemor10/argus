@@ -6,6 +6,7 @@ NSRGY), BRK-B, and ETFs; `upgrades_downgrades` provides the dated per-firm
 rating-change history that feeds analyst_actions.
 """
 
+import math
 import re
 from datetime import UTC, date, datetime
 from typing import Any
@@ -13,7 +14,13 @@ from typing import Any
 from pydantic import AwareDatetime
 
 from argus.fields import Field, Source
-from argus.models import AnalystActionRecord, CompanyProfile, ParseFailure, RawObservation
+from argus.models import (
+    AnalystActionRecord,
+    CompanyProfile,
+    EarningsResultRecord,
+    ParseFailure,
+    RawObservation,
+)
 from argus.sources.base import FetchResult, SourceError
 
 # info-key → (Field, divisor). yfinance already reports margins as fractions
@@ -67,8 +74,10 @@ class YahooSource:
         return self.parse(payload, ticker, fetched_at)
 
     def _fetch_raw(self, ticker: str) -> dict[str, Any]:
-        """Network only: yfinance Ticker info + calendar + upgrades_downgrades.
-        Recorded payloads live in tests/fixtures/yahoo/."""
+        """Network only: yfinance Ticker info + calendar + upgrades_downgrades
+        + earnings_history (the quoteSummary earningsHistory module — reported
+        quarters with actual vs estimate; empty for ETFs and never-covered
+        names). Recorded payloads live in tests/fixtures/yahoo/."""
         import yfinance  # lazy: keep module import free of network side effects
 
         t = yfinance.Ticker(ticker)
@@ -82,14 +91,29 @@ class YahooSource:
                 grade_date = record.get("GradeDate")
                 if hasattr(grade_date, "isoformat"):
                     record["GradeDate"] = grade_date.isoformat()
+        history = t.earnings_history
+        if history is None or history.empty:
+            earnings_rows = None
+        else:
+            earnings_rows = history.reset_index().to_dict("records")
+            for row in earnings_rows:  # Timestamp index → ISO string (JSON-safe)
+                quarter = row.get("quarter")
+                if hasattr(quarter, "isoformat"):
+                    row["quarter"] = quarter.isoformat()
         calendar = {str(k): str(v) for k, v in (t.calendar or {}).items()}
-        return {"info": info, "upgrades_downgrades": records, "calendar": calendar}
+        return {
+            "info": info,
+            "upgrades_downgrades": records,
+            "calendar": calendar,
+            "earnings_history": earnings_rows,
+        }
 
     def parse(self, payload: Any, ticker: str, fetched_at: AwareDatetime) -> FetchResult:
         """Pure. Maps yfinance keys to Fields with unit normalization:
         margins stay fractions, debtToEquity percent → ratio, quote
         timestamps → observed_at, upgrades_downgrades rows →
-        AnalystActionRecord. Values present but unreadable become
+        AnalystActionRecord, earnings_history rows with an actual →
+        EarningsResultRecord. Values present but unreadable become
         ParseFailure, never silent absences; implausible values pass
         through untouched — gates judge, adapters only normalize."""
         info = _subdict(payload, "info")
@@ -98,6 +122,7 @@ class YahooSource:
         observations: list[RawObservation] = []
         failures: list[ParseFailure] = []
         actions: list[AnalystActionRecord] = []
+        earnings_records: list[EarningsResultRecord] = []
 
         def emit_num(
             field: Field, raw: Any, divisor: float = 1.0, observed_at: datetime | None = None
@@ -216,10 +241,40 @@ class YahooSource:
                     )
                 )
 
+        history_rows = payload.get("earnings_history") if isinstance(payload, dict) else None
+        if isinstance(history_rows, (list, tuple)):
+            unreadable: list[Any] = []
+            for row in history_rows:
+                if _is_unreported_quarter(row):
+                    # Not malformed — the reported-quarters feed can briefly
+                    # carry a just-announced quarter whose actual Yahoo has
+                    # not filled in yet. Not yet a result; it lands (keyed on
+                    # quarter_end) once the actual appears.
+                    continue
+                parsed = _parse_earnings_result(row, ticker, self.source_id, fetched_at)
+                if parsed is None:
+                    unreadable.append(row)
+                else:
+                    earnings_records.append(parsed)
+            if unreadable:
+                # Same policy as the analyst history: sent-but-unreadable is
+                # evidence, aggregated into ONE compact failure on the field
+                # earnings news belongs to.
+                failures.append(
+                    _failure(
+                        Field.NEXT_EARNINGS_DATE,
+                        f"{len(unreadable)} unreadable earnings-history row(s), "
+                        f"e.g. {_earnings_fingerprint(unreadable[0])}",
+                        ticker,
+                        fetched_at,
+                    )
+                )
+
         return FetchResult(
             observations=tuple(observations),
             parse_failures=tuple(failures),
             analyst_actions=tuple(actions),
+            earnings_results=tuple(earnings_records),
             profile=_profile(info, ticker, self.source_id, fetched_at),
         )
 
@@ -393,6 +448,67 @@ def _grade_date(raw: Any) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _clean_number(raw: Any) -> float | None:
+    """int/float → finite float; bool (float(True) == 1.0 would launder
+    garbage), NaN/inf, and anything else → None."""
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+        return None
+    value = float(raw)
+    return value if math.isfinite(value) else None
+
+
+def _is_unreported_quarter(row: Any) -> bool:
+    """A dict row whose epsActual is absent or NaN is a quarter the source
+    lists but has not filled with a result yet — out of scope for a
+    reported-results record, not a broken instance of one. Non-dict garbage
+    stays malformed."""
+    if not isinstance(row, dict):
+        return False
+    actual = row.get("epsActual")
+    if actual is None:
+        return True
+    return isinstance(actual, float) and math.isnan(actual)
+
+
+def _parse_earnings_result(
+    row: Any, ticker: str, source: Source, fetched_at: AwareDatetime
+) -> EarningsResultRecord | None:
+    """One earnings-history row → EarningsResultRecord; None when the quarter
+    or a PRESENT value cannot be read (the caller aggregates those into one
+    ParseFailure). An absent/NaN estimate is a fact — the street had no
+    number — and maps to None on the record, distinct from garbage."""
+    if not isinstance(row, dict):
+        return None
+    quarter_end = _grade_date(row.get("quarter"))
+    actual = _clean_number(row.get("epsActual"))
+    if quarter_end is None or actual is None:
+        return None
+    estimate_raw = row.get("epsEstimate")
+    if estimate_raw is None or (isinstance(estimate_raw, float) and math.isnan(estimate_raw)):
+        estimate = None
+    else:
+        estimate = _clean_number(estimate_raw)
+        if estimate is None:
+            return None  # present but unreadable — evidence, not an absence
+    return EarningsResultRecord(
+        ticker=ticker,
+        quarter_end=quarter_end,
+        eps_actual=actual,
+        eps_estimate=estimate,
+        source=source,
+        fetched_at=fetched_at,
+    )
+
+
+def _earnings_fingerprint(row: Any) -> str:
+    """A terse identity for an unreadable earnings-history row — the quarter
+    if one is legible — instead of a raw dict dump in the quarantine table."""
+    if not isinstance(row, dict):
+        return f"a {type(row).__name__} row"
+    quarter = row.get("quarter")
+    return f"quarter {str(quarter)[:10]}" if quarter else "an undated quarter"
 
 
 def fetch_history(ticker: str, period: str = "1y") -> list[tuple[date, float]] | None:

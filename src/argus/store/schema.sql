@@ -96,6 +96,23 @@ CREATE TABLE analyst_actions (
     PRIMARY KEY (ticker, action_date, firm, to_grade)
 ) WITHOUT ROWID;
 
+-- Event-shaped like analyst_actions: one REPORTED quarter per row — realized
+-- EPS beside the street estimate at report time. Scheduled future quarters
+-- have no actual and never land here. INSERT OR IGNORE on the natural key;
+-- first_seen_run_id makes "reported since last run" a set-membership fact
+-- that is automatically correct across failed runs. First write wins: a
+-- later revision of an actual never rewrites what Argus first reported.
+CREATE TABLE earnings_results (
+    ticker            TEXT NOT NULL,
+    quarter_end       TEXT NOT NULL,      -- fiscal quarter end (ISO date)
+    eps_actual        REAL NOT NULL,
+    eps_estimate      REAL,               -- street consensus at report time; NULL if none
+    source            TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL,
+    first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, quarter_end)
+) WITHOUT ROWID;
+
 -- Descriptive business identity per ticker, append-only (latest fetched_at
 -- wins on read). Not gate-material — no plausibility bounds exist for prose —
 -- but provenance-stamped like everything else. Reports render it; the diff

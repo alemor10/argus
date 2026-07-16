@@ -30,7 +30,7 @@ GARBAGE_PAYLOADS = (
     "not a dict",
     42,
     {"info": "not a dict", "calendar": 3, "upgrades_downgrades": "not a list",
-     "facts": "not a dict", "c": {}},
+     "earnings_history": "not a list", "facts": "not a dict", "c": {}},
 )
 
 
@@ -161,11 +161,77 @@ class TestYahooParse:
         assert failure.field is Field.ANALYST_RATING
         assert "NoDate Broker" in failure.raw
 
+    def test_earnings_history_rows_with_actuals_become_records(self):
+        payload = {
+            "info": {},
+            "earnings_history": [
+                {"quarter": "2026-03-31T00:00:00", "epsActual": 0.98, "epsEstimate": 1.00,
+                 "epsDifference": -0.02, "surprisePercent": -0.02},
+                {"quarter": "2026-06-30T00:00:00", "epsActual": 1.05, "epsEstimate": 0.93,
+                 "epsDifference": 0.12, "surprisePercent": 0.129},
+            ],
+        }
+        result = YahooSource().parse(payload, "TEST", FETCHED_AT)
+        assert result.parse_failures == ()
+        [q1, q2] = result.earnings_results
+        assert (q1.quarter_end, q1.eps_actual, q1.eps_estimate) == (date(2026, 3, 31), 0.98, 1.00)
+        assert (q2.quarter_end, q2.eps_actual, q2.eps_estimate) == (date(2026, 6, 30), 1.05, 0.93)
+        for record in (q1, q2):
+            assert record.ticker == "TEST"
+            assert record.source is Source.YAHOO
+            assert record.fetched_at == FETCHED_AT
+
+    def test_unreported_quarter_is_skipped_not_quarantined(self):
+        """A just-announced quarter can arrive with its actual not yet filled
+        (NaN) — not yet a result and not malformed. It lands once the actual
+        appears; quarantining it every run would erode the section."""
+        payload = {
+            "info": {},
+            "earnings_history": [
+                {"quarter": "2026-06-30T00:00:00", "epsActual": float("nan"), "epsEstimate": 0.93},
+                {"quarter": "2026-09-30T00:00:00", "epsEstimate": 1.10},  # actual absent entirely
+            ],
+        }
+        result = YahooSource().parse(payload, "TEST", FETCHED_AT)
+        assert result.earnings_results == ()
+        assert result.parse_failures == ()
+
+    def test_missing_estimate_maps_to_none_not_a_failure(self):
+        """No street coverage is a fact, distinct from garbage: the actual
+        still records, with estimate None."""
+        payload = {
+            "info": {},
+            "earnings_history": [
+                {"quarter": "2026-06-30T00:00:00", "epsActual": 1.05, "epsEstimate": float("nan")},
+            ],
+        }
+        [record] = YahooSource().parse(payload, "TEST", FETCHED_AT).earnings_results
+        assert record.eps_actual == 1.05
+        assert record.eps_estimate is None
+
+    def test_malformed_earnings_rows_become_one_aggregated_parse_failure(self):
+        payload = {
+            "info": {},
+            "earnings_history": [
+                {"quarter": "garbled", "epsActual": 1.05},  # unreadable quarter
+                {"quarter": "2026-03-31T00:00:00", "epsActual": True},  # bool laundering guard
+                {"quarter": "2026-06-30T00:00:00", "epsActual": 1.05, "epsEstimate": "N/A"},
+                {"quarter": "2026-09-30T00:00:00", "epsActual": 0.50, "epsEstimate": 0.40},  # good
+            ],
+        }
+        result = YahooSource().parse(payload, "TEST", FETCHED_AT)
+        [record] = result.earnings_results  # the good row still lands
+        assert record.quarter_end == date(2026, 9, 30)
+        [failure] = result.parse_failures  # the bad ones are evidence, aggregated
+        assert failure.field is Field.NEXT_EARNINGS_DATE
+        assert "3 unreadable earnings-history row(s)" in failure.raw
+
     @pytest.mark.parametrize("junk", GARBAGE_PAYLOADS)
     def test_parse_never_raises_on_garbage(self, junk):
         result = YahooSource().parse(junk, "TEST", FETCHED_AT)
         assert result.observations == ()
         assert result.analyst_actions == ()
+        assert result.earnings_results == ()
 
     def test_covers_everything(self):
         assert YahooSource().covers("NTDOY")
@@ -350,6 +416,9 @@ class TestLiveSmoke:
     def test_yahoo_live(self):
         result = YahooSource().fetch("AAPL")
         assert any(o.field is Field.PRICE for o in result.observations)
+        # AAPL always has reported quarters; every record carries an actual.
+        assert result.earnings_results
+        assert all(r.eps_actual is not None for r in result.earnings_results)
 
     def test_finnhub_live(self):
         api_key = os.environ.get("FINNHUB_API_KEY")

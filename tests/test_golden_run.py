@@ -8,8 +8,11 @@ sources covering the pathology matrix:
     a naive pipeline would print) appears nowhere.
   - NVDA: +6.6% price move over a 5% threshold; consensus buy → hold; one NEW
     analyst downgrade among re-served old ones (dedup via first_seen_run_id);
-    earnings 4 days out; Finnhub down for NVDA in run 2 (cross-check skipped
-    and disclosed).
+    a re-served earnings result (dedup: reported on run 1 → suppressed as
+    first-run baseline, and NEVER re-fires); earnings 4 days out; Finnhub
+    down for NVDA in run 2 (cross-check skipped and disclosed).
+  - NTDOY: a quarter REPORTED between the runs → earnings_reported fires
+    beside the quarantine headline.
   - DEADCO: fine in run 1, every source dies in run 2 → ticker failed, run
     goes 'partial', digest still written.
 
@@ -27,6 +30,7 @@ from argus.fields import Field, Source
 from argus.gates import DEFAULT_PROFILE
 from argus.models import (
     AnalystActionRecord,
+    EarningsResultRecord,
     RawObservation,
     Thresholds,
     TickerContext,
@@ -91,7 +95,10 @@ class _StubSource:
             for o in payload.get("observations", ())
         )
         actions = tuple(payload.get("actions", ()))
-        return FetchResult(observations=observations, analyst_actions=actions)
+        earnings = tuple(payload.get("earnings", ()))
+        return FetchResult(
+            observations=observations, analyst_actions=actions, earnings_results=earnings
+        )
 
 
 def _sources_run1():
@@ -128,6 +135,17 @@ def _sources_run1():
                     fetched_at=RUN1_AT,
                 )
             ],
+            "earnings": [
+                # First-run history: stored as baseline, suppressed as news.
+                EarningsResultRecord(
+                    ticker="NVDA",
+                    quarter_end=date(2026, 4, 26),
+                    eps_actual=0.81,
+                    eps_estimate=0.75,
+                    source=Source.YAHOO,
+                    fetched_at=RUN1_AT,
+                )
+            ],
         },
     }
     finnhub = {
@@ -149,7 +167,18 @@ def _sources_run2():
                 _obs("NTDOY", Field.PRICE, num=10.97),
                 _obs("NTDOY", Field.ANALYST_TARGET_MEAN, num=35.00),  # the stale pathology
                 _obs("NTDOY", Field.ANALYST_RATING, text="buy"),
-            ]
+            ],
+            "earnings": [
+                # Reported between the runs: must fire as earnings_reported.
+                EarningsResultRecord(
+                    ticker="NTDOY",
+                    quarter_end=date(2026, 5, 31),
+                    eps_actual=0.12,
+                    eps_estimate=0.10,
+                    source=Source.YAHOO,
+                    fetched_at=RUN2_AT,
+                )
+            ],
         },
         "NVDA": {
             "observations": [
@@ -184,6 +213,17 @@ def _sources_run2():
                     source=Source.YAHOO,
                     fetched_at=RUN2_AT,
                 ),
+            ],
+            "earnings": [
+                # Re-served from run 1: first_seen_run_id dedup must ignore it.
+                EarningsResultRecord(
+                    ticker="NVDA",
+                    quarter_end=date(2026, 4, 26),
+                    eps_actual=0.81,
+                    eps_estimate=0.75,
+                    source=Source.YAHOO,
+                    fetched_at=RUN2_AT,
+                )
             ],
         },
     }
@@ -272,11 +312,15 @@ def test_golden_run_events_in_store(con):
     assert "analyst_action" in by_ticker["NVDA"]
     assert "earnings_imminent" in by_ticker["NVDA"]
     assert "field_quarantined" in by_ticker["NTDOY"]
+    assert "earnings_reported" in by_ticker["NTDOY"]  # reported between the runs
     assert "DEADCO" not in by_ticker  # failed ticker: no snapshot, no events
 
     # exactly ONE new analyst action despite the re-served old one
     actions = [k for k in by_ticker["NVDA"] if k == "analyst_action"]
     assert len(actions) == 1
+    # NVDA's quarter was first seen on run 1 (baseline): the run-2 re-serve
+    # must not fire — a stale quarter re-reported weekly would be noise.
+    assert "earnings_reported" not in by_ticker["NVDA"]
 
     # the quarantined target is in the store with its reason, price untouched
     quarantined = con.execute(

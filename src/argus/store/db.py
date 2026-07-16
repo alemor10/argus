@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -67,6 +67,20 @@ CREATE TABLE IF NOT EXISTS scorecard_marks (
     name_return       REAL    NOT NULL,
     spy_return        REAL    NOT NULL,
     PRIMARY KEY (run_id, ticker)
+) WITHOUT ROWID;
+""",
+    # v1.6: earnings results — reported quarters (actual vs street estimate),
+    # event-shaped like analyst_actions. IF NOT EXISTS, same no-op guarantee.
+    5: """
+CREATE TABLE IF NOT EXISTS earnings_results (
+    ticker            TEXT NOT NULL,
+    quarter_end       TEXT NOT NULL,
+    eps_actual        REAL NOT NULL,
+    eps_estimate      REAL,
+    source            TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL,
+    first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, quarter_end)
 ) WITHOUT ROWID;
 """,
 }

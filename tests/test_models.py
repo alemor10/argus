@@ -6,6 +6,8 @@ from pydantic import ValidationError
 from argus.fields import Field, QuarantineCode, Source
 from argus.models import (
     CHANGE_EVENT_ADAPTER,
+    EarningsReported,
+    EarningsResultRecord,
     FieldValue,
     GatedObservation,
     ParseFailure,
@@ -155,3 +157,29 @@ class TestChangeEventRoundTrip:
         restored = CHANGE_EVENT_ADAPTER.validate_json(payload)
         assert restored == event
         assert isinstance(restored, PriceMove)
+
+    def test_earnings_reported_survives_json(self):
+        event = EarningsReported(
+            ticker="NVDA", quarter_end=date(2026, 6, 30),
+            eps_actual=1.05, eps_estimate=0.93, surprise_pct=12.9,
+        )
+        restored = CHANGE_EVENT_ADAPTER.validate_json(event.model_dump_json())
+        assert restored == event
+        assert isinstance(restored, EarningsReported)
+
+
+class TestEarningsResultRecord:
+    def test_non_finite_eps_is_rejected_at_construction(self):
+        """NaN binds as NULL in SQLite and would violate the table's NOT NULL
+        mid-transaction — reject it at the model boundary instead."""
+        for bad in (float("nan"), float("inf")):
+            with pytest.raises(ValidationError):
+                EarningsResultRecord(
+                    ticker="NVDA", quarter_end=date(2026, 6, 30), eps_actual=bad,
+                    source=Source.YAHOO, fetched_at=NOW,
+                )
+        with pytest.raises(ValidationError):
+            EarningsResultRecord(
+                ticker="NVDA", quarter_end=date(2026, 6, 30), eps_actual=1.0,
+                eps_estimate=float("nan"), source=Source.YAHOO, fetched_at=NOW,
+            )

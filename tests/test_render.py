@@ -9,6 +9,7 @@ from argus.digest import render
 from argus.fields import Field, QuarantineCode, Source
 from argus.models import (
     EarningsImminent,
+    EarningsReported,
     FieldQuarantined,
     FieldValue,
     PriceMove,
@@ -171,6 +172,29 @@ class TestChangesSection:
         out = render(_report([mover]))
         assert "- Price 170.00 → 181.25 (+6.6%, threshold 5.0%) vs 2026-06-28" in out
         assert "- Earnings imminent: 2026-07-17 (in 4 days)" in out
+
+    def test_earnings_reported_prints_actual_estimate_and_surprise(self):
+        reporter = _quiet_ticker(
+            events=(
+                EarningsReported(
+                    ticker="NVDA", quarter_end=date(2026, 6, 30),
+                    eps_actual=1.05, eps_estimate=0.93, surprise_pct=12.9,
+                ),
+            ),
+        )
+        out = render(_report([reporter]))
+        assert "- Earnings reported (quarter ended 2026-06-30): EPS 1.05 vs 0.93 est (+12.9%)" in out
+
+    def test_earnings_reported_without_estimate_says_so(self):
+        reporter = _quiet_ticker(
+            events=(
+                EarningsReported(
+                    ticker="NVDA", quarter_end=date(2026, 6, 30), eps_actual=-0.42
+                ),
+            ),
+        )
+        out = render(_report([reporter]))
+        assert "- Earnings reported (quarter ended 2026-06-30): EPS -0.42 (no street estimate)" in out
 
     def test_first_run_notes_baseline_established(self):
         out = render(_report([_quiet_ticker(baseline_run_id=None, baseline_as_of=None)]))

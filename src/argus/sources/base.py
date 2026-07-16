@@ -14,7 +14,13 @@ from typing import Protocol, runtime_checkable
 from pydantic import BaseModel, ConfigDict
 
 from argus.fields import Source
-from argus.models import AnalystActionRecord, CompanyProfile, ParseFailure, RawObservation
+from argus.models import (
+    AnalystActionRecord,
+    CompanyProfile,
+    EarningsResultRecord,
+    ParseFailure,
+    RawObservation,
+)
 
 
 class SourceError(RuntimeError):
@@ -29,6 +35,7 @@ class FetchResult(BaseModel):
     observations: tuple[RawObservation, ...] = ()
     parse_failures: tuple[ParseFailure, ...] = ()  # sent-but-unreadable → UNPARSEABLE quarantine
     analyst_actions: tuple[AnalystActionRecord, ...] = ()
+    earnings_results: tuple[EarningsResultRecord, ...] = ()  # reported quarters (actuals only)
     profile: CompanyProfile | None = None  # descriptive identity, when the source carries one
 
 

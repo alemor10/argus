@@ -17,6 +17,7 @@ from argus.models import (
     ChangeEvent,
     ConsensusShift,
     EarningsImminent,
+    EarningsReported,
     FieldQuarantined,
     FieldRecovered,
     PriceMove,
@@ -488,6 +489,19 @@ def _event_line(event: ChangeEvent) -> str:
         case AnalystAction(firm=firm, action=action, from_grade=from_grade, to_grade=to_grade, action_date=when):
             grades = f"{from_grade} → {to_grade}" if from_grade else to_grade
             return f"Analyst action ({when.isoformat()}): {firm} {action} — {grades}"
+        case EarningsReported(
+            quarter_end=quarter_end,
+            eps_actual=eps_actual,
+            eps_estimate=eps_estimate,
+            surprise_pct=surprise_pct,
+        ):
+            line = f"Earnings reported (quarter ended {quarter_end.isoformat()}): EPS {eps_actual:.2f}"
+            if eps_estimate is None:
+                return line + " (no street estimate)"
+            line += f" vs {eps_estimate:.2f} est"
+            if surprise_pct is not None:
+                line += f" ({surprise_pct:+.1f}%)"
+            return line
         case EarningsImminent(earnings_date=earnings_date, days_until=days_until):
             return f"Earnings imminent: {earnings_date.isoformat()} ({_days_phrase(days_until)})"
         case FieldQuarantined(field=field, reasons=reasons):

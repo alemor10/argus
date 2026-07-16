@@ -8,6 +8,7 @@ Status: PARTIAL — some tickers or sources failed this run; degradation is deta
 
 _Switch 2 cycle + IP monetization._
 
+- Earnings reported (quarter ended 2026-05-31): EPS 0.12 vs 0.10 est (+20.0%)
 - ⚠ Analyst target (mean) went dark — DATA QUARANTINED: target 35.00 (yahoo) / price 10.97 (yahoo) = 3.19 outside [0.3, 3.0]
 
 ### NVDA

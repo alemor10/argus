@@ -15,6 +15,11 @@ Semantics (see ARCHITECTURE.md, Change detection):
     first_seen_run_id is the current run — set membership, no window math).
     Suppressed on a ticker's first-ever run: the feed's whole dated history
     is baseline then, not news.
+  - EarningsReported: exactly the new_earnings passed in (same first-seen
+    set membership, same first-run suppression — the source hands over its
+    full reported history then, which is baseline, not news). The surprise
+    is computed here from the stored estimate/actual facts, never taken
+    from the source's own surprise figure.
   - EarningsImminent: state event; re-fires each run inside the window
     (suppression logic's failure mode is silence).
   - FieldQuarantined / FieldRecovered: verdict transitions per field.
@@ -31,6 +36,8 @@ from argus.models import (
     ChangeEvent,
     ConsensusShift,
     EarningsImminent,
+    EarningsReported,
+    EarningsResultRecord,
     FieldQuarantined,
     FieldRecovered,
     FieldValue,
@@ -58,19 +65,21 @@ def detect(
     today: date,
     *,
     latest_accepted: Callable[[Field], FieldValue | None],
+    new_earnings: Sequence[EarningsResultRecord] = (),
 ) -> list[ChangeEvent]:
     """Diff one ticker's snapshots into typed events.
 
     `latest_accepted` is the injected store lookup used only when the baseline
     snapshot lacks an accepted value for a field (quarantine/outage gap
     fallback). A `baseline` of None means first-ever run for this ticker:
-    no diff events AND no analyst-action events — the source's entire dated
-    history is "first seen" on that run, and 14 years of rating actions is
-    baseline, not news (a real first live run produced 1,100 lines of it).
-    The rows are still stored with first_seen_run_id, so from the next run
-    on, only genuinely new actions fire. On a first run only the state-style
-    events fire — EarningsImminent, and ThesisDrift (a breach is a breach on
-    day one, needing no history) — and the digest also lists the ticker under
+    no diff events AND no analyst-action or earnings-reported events — the
+    source's entire dated history is "first seen" on that run, and 14 years
+    of rating actions (or four reported quarters) is baseline, not news (a
+    real first live run produced 1,100 lines of it). The rows are still
+    stored with first_seen_run_id, so from the next run on, only genuinely
+    new items fire. On a first run only the state-style events fire —
+    EarningsImminent, and ThesisDrift (a breach is a breach on day one,
+    needing no history) — and the digest also lists the ticker under
     "baseline established".
     """
     events: list[ChangeEvent] = []
@@ -108,7 +117,7 @@ def detect(
 
     # Diff and action events require a baseline run. Canonical order:
     # thesis_drift, price_move, target_move, consensus_shift, analyst_action,
-    # earnings_imminent, field_quarantined, field_recovered.
+    # earnings_reported, earnings_imminent, field_quarantined, field_recovered.
     if baseline is not None:
         for field, threshold, make in (
             (Field.PRICE, ctx.thresholds.price_move_pct, PriceMove),
@@ -130,6 +139,17 @@ def detect(
                     from_grade=record.from_grade,
                     to_grade=record.to_grade,
                     action_date=record.action_date,
+                )
+            )
+
+        for result in sorted(new_earnings, key=lambda r: r.quarter_end):
+            events.append(
+                EarningsReported(
+                    ticker=result.ticker,
+                    quarter_end=result.quarter_end,
+                    eps_actual=result.eps_actual,
+                    eps_estimate=result.eps_estimate,
+                    surprise_pct=_surprise_pct(result),
                 )
             )
 
@@ -163,6 +183,18 @@ def detect(
                 events.append(FieldRecovered(ticker=current.ticker, field=field))
 
     return events
+
+
+def _surprise_pct(result: EarningsResultRecord) -> float | None:
+    """(actual − estimate) / |estimate| · 100, so a beat is positive whatever
+    the estimate's sign (−0.50 actual against a −1.00 estimate is a +50%
+    beat). Computed from the two stored facts, never taken from the source's
+    own surprise figure (unit ambiguity is not worth importing). None when
+    there is no estimate to be surprised against, or the estimate is zero —
+    the division is undefined; the actual still reports."""
+    if result.eps_estimate is None or result.eps_estimate == 0:
+        return None
+    return round((result.eps_actual - result.eps_estimate) / abs(result.eps_estimate) * 100, 1)
 
 
 def _resolve_baseline(

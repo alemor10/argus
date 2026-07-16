@@ -49,6 +49,12 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       a breach against the stated line. Argus NEVER interprets the thesis prose —
       it reports data vs a human-drawn line (no forecasts, human decides). See
       ARCHITECTURE.md, Thesis drift.
+- [x] Earnings results reporting (v1.6, 2026-07-15): when a quarter's results
+      land since the last run, watch reports realized EPS vs the street estimate
+      at report time ("EPS 1.05 vs 0.93 est (+12.9%)"). Realized data against a
+      line third parties drew — never an Argus forecast. Event-shaped like
+      analyst actions (first-seen set membership; first-run history is baseline,
+      not news). See ARCHITECTURE.md, Change detection.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 
