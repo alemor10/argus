@@ -65,6 +65,12 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       information (the alarm-fatigue guard). Bellwether megacap earnings
       calendar as a claims-labeled context section (one Finnhub call). See
       ARCHITECTURE.md, Macro watch + daily pulse.
+- [x] PDF-first delivery (v1.8, 2026-07-15): the PDF carries the WHOLE digest
+      (watch page 1 = Macro + every change event + bellwethers; page 2 =
+      watchlist, quarantine table, data health; then detail pages) and is what
+      Discord/email deliver — the .md attaches only as the no-PDF fallback.
+      Markdown remains the canonical on-disk record (bit-for-bit `report
+      --run N`, golden byte-compares). See ARCHITECTURE.md, PDF-first delivery.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

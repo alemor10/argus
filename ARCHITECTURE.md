@@ -591,6 +591,7 @@ the point.
 | Macro series fetch from exactly one source; equity event machinery off | Full source fan-out; shared thresholds | Finnhub `covers()` says yes to everything → per-run health noise for index symbols; a 5% default PriceMove fires constantly on VIX and 23bp of unchosen yield alerting. Quarantine transitions stay shared — a series going dark is news. |
 | FRED via keyless fredgraph.csv; transforms computed in the adapter | Keyed official API now; raw index levels reported | Zero-setup matches the free-first posture (eyes-open unofficial, one-module blast radius, keyed API documented as the upgrade); YoY/MoM from two points of the same official series is the EDGAR-ratio precedent, and "CPI YoY 3.5%" is the number a human actually watches. |
 | Bellwether earnings are claims-only and never open the delivery gate | Gate on megacap reports; verify through the v1 stack | In season bellwethers report near-daily — gating on them turns events-only back into posting-daily; verifying ten non-held names through the fetch→gate stack costs the rate budget the watchlist needs. Context, labeled as such. |
+| PDF is the delivered artifact; markdown stays the canonical record | Markdown-first with PDF companion (v1.2–v1.7); PDF-only everywhere | The reader wants one complete document — so the PDF gained full digest parity and Discord/email attach it (md only as the no-PDF fallback, never silence). But byte-for-byte regeneration, golden byte-compares, and the Discord headline extraction are text properties; a PDF is deterministic only within a matplotlib version. The record and the rendering are different jobs. |
 
 ## Scout (discovery) — v1.1
 
@@ -759,6 +760,27 @@ run, persisted per run (`bellwether_earnings`) for reproducibility. Never
 gated, never observations, and deliberately NOT a delivery trigger (in
 season bellwethers report near-daily, which would defeat the gating);
 fetch failures append a run note and never block the digest.
+
+## PDF-first delivery — v1.8
+
+The PDF is the artifact the human reads, so it carries the WHOLE digest, not
+a companion summary. Watch PDFs: page 1 is the news (the Macro strip, every
+change event rendered with the digest's own event lines — reused verbatim,
+the two artifacts must never tell different stories — and the bellwether
+calendar); page 2 is the state (watchlist table, thesis breaches, the full
+quarantine table, data health); then the per-ticker detail pages. Scout PDFs
+were already complete. Flowing blocks are capped with a disclosed overflow
+line — a matplotlib figure silently draws past the page edge.
+
+Delivery: Discord attaches the PDF (plus the headline text message, whose
+content is still extracted from the markdown's Changes section); the .md
+file attaches only as the FALLBACK when no PDF exists (ARGUS_PDF=0, or a
+build failure — which is already disclosed as a run note). Email attaches
+the PDF beside its text body. The markdown remains the canonical record: it
+is what `argus report --run N` regenerates bit-for-bit, what golden tests
+byte-compare, and what lands on disk beside the PDF for grepping — the PDF
+is deterministic too (CreationDate suppressed) but only within a matplotlib
+version, so text stays the reproducibility contract.
 
 ## Scout self-scoring — v1.5 ("grade the grader")
 

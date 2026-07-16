@@ -47,6 +47,14 @@ from matplotlib.backends.backend_pdf import PdfPages
 from matplotlib.figure import Figure
 from matplotlib.patches import Rectangle
 
+from argus.digest import (
+    # The digest's own line renderers — the two artifacts must never tell
+    # different stories about the same run, so the PDF reuses them verbatim
+    # (markdown chrome stripped at the call sites).
+    _event_line as _digest_event_line,
+    _macro_line as _digest_macro_line,
+    _spread_lines as _digest_spread_lines,
+)
 from argus.fields import SPECS, Field, Source
 from argus.models import (
     CompanyProfile,
@@ -180,6 +188,12 @@ def build_pdf(
     buffer = io.BytesIO()
     with PdfPages(buffer, metadata=metadata) as pdf:
         _save(pdf, _summary_page(report, total_details=len(subjects), shown_details=len(shown)))
+        if report.kind == "watch":
+            # PDF-first (v1.8): the PDF is the delivered artifact, so it
+            # carries the WHOLE digest — page 1 is the news (Macro, Changes,
+            # Bellwethers), page 2 the state (watchlist table, quarantines,
+            # data health), then the per-ticker detail pages.
+            _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
     return buffer.getvalue()
@@ -271,19 +285,23 @@ def _summary_page(report: RunReport, *, total_details: int, shown_details: int) 
     if report.kind == "scout":
         _scout_summary(fig, cur, report)
     else:
-        _watch_summary(fig, cur, report)
+        _watch_news(fig, cur, report)
     if total_details > shown_details:
         cur.gap(0.012)
         cur.line(
             f"Detail pages are capped: showing the first {shown_details} of {total_details}.",
             size=9, color=_CRITICAL,
         )
+    _page_footer(fig, report)
+    return fig
+
+
+def _page_footer(fig: Figure, report: RunReport) -> None:
     fig.text(
         0.5, 0.03,
         f"Run {report.run_id} — regenerate with: argus report --run {report.run_id}",
         ha="center", va="bottom", fontsize=8, color=_MUTED,
     )
-    return fig
 
 
 def _status_line(report: RunReport) -> str:
@@ -561,6 +579,170 @@ def _health_lines(report: RunReport) -> list[tuple[str, str]]:
             lines.append((f"  … and {len(failed) - 8} more.", _MUTED))
     if report.notes:
         lines.append((_clip(f"Run note: {report.notes}", 122), _SECONDARY))
+    return lines
+
+
+# Page-space rails: a matplotlib figure silently draws past the page edge, so
+# every flowing block is capped with a disclosed overflow line (the markdown
+# digest and the store always carry the full record).
+_MAX_MACRO_LINES = 20
+_MAX_CHANGES_LINES = 30
+_MAX_BELLWETHER_LINES = 14
+_MAX_QUARANTINE_LINES = 12
+
+
+def _block(cur: _Cursor, title: str, lines: list[tuple[str, str]], cap: int) -> None:
+    cur.line(title, size=11, weight="bold")
+    cur.gap(0.008)
+    for text, tone in lines[:cap]:
+        cur.line(text, size=8.5, color=tone)
+    if len(lines) > cap:
+        cur.line(
+            f"… and {len(lines) - cap} more — the markdown digest carries the full list.",
+            size=8.5, color=_MUTED,
+        )
+    cur.gap(0.014)
+
+
+def _watch_news(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+    """Watch page 1 — what the reader opens the report for: the macro
+    backdrop, then every change event, then the bellwether calendar."""
+    macro_lines = _macro_pdf_lines(report)
+    if macro_lines:
+        _block(cur, "Macro", macro_lines, _MAX_MACRO_LINES)
+    _block(cur, "Changes", _changes_pdf_lines(report), _MAX_CHANGES_LINES)
+    bellwether_lines = _bellwether_pdf_lines(report)
+    if bellwether_lines:
+        _block(cur, "Bellwether earnings (finnhub, unverified)", bellwether_lines,
+               _MAX_BELLWETHER_LINES)
+
+
+def _watch_status_page(report: RunReport) -> Figure:
+    """Watch page 2 — the standing state: watchlist table, quarantine table,
+    data health. Mirrors the markdown's back half."""
+    fig = plt.figure(figsize=_PAGE)
+    cur = _Cursor(fig)
+    _watch_summary(fig, cur, report)
+    cur.gap(0.016)
+    _block(cur, "Data quarantined", _quarantine_pdf_lines(report), _MAX_QUARANTINE_LINES)
+    cur.line("Data health", size=11, weight="bold")
+    cur.gap(0.008)
+    for text, tone in _health_lines(report):
+        cur.line(text, size=8.5, color=tone)
+    _page_footer(fig, report)
+    return fig
+
+
+def _sorted_watch_then_macro(report: RunReport) -> list[TickerReport]:
+    """The digest's Changes ordering: equities first, then macro, each
+    alphabetical."""
+    watch = sorted(
+        (t for t in report.tickers if t.context.macro is None), key=lambda t: t.context.ticker
+    )
+    macro = sorted(
+        (t for t in report.tickers if t.context.macro is not None),
+        key=lambda t: t.context.ticker,
+    )
+    return watch + macro
+
+
+def _macro_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
+    """The digest's Macro section, via the digest's own line renderer —
+    markdown chrome stripped, warning lines toned critical."""
+    macro = sorted(
+        (t for t in report.tickers if t.context.macro is not None),
+        key=lambda t: (t.context.macro.label, t.context.ticker),
+    )
+    lines: list[tuple[str, str]] = []
+    for ticker in macro:
+        text = _digest_macro_line(ticker).removeprefix("- ")
+        lines.append((_clip(text, 118), _CRITICAL if "⚠" in text else _INK))
+    for spread in _digest_spread_lines(macro):
+        text = spread.removeprefix("- ").replace("_(", "(").replace(")_", ")")
+        lines.append((_clip(text, 118), _SECONDARY))
+    return lines
+
+
+def _changes_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
+    """Every change event, rendered with the digest's own event lines —
+    the counts-only summary this replaced buried the actual news."""
+    lines: list[tuple[str, str]] = []
+    ordered = _sorted_watch_then_macro(report)
+    for ticker in ordered:
+        if not ticker.events:
+            continue
+        lines.append((ticker.context.ticker, _INK))
+        for event in ticker.events:
+            text = _digest_event_line(event)
+            lines.append(
+                ("   " + _clip(text, 114), _CRITICAL if text.startswith("⚠") else _INK)
+            )
+    if not lines:
+        lines.append(("No changes since last run.", _SECONDARY))
+    firsts = [
+        t.context.ticker for t in ordered if t.baseline_run_id is None and t.status != "failed"
+    ]
+    if firsts:
+        lines.append(
+            (_clip("Baseline established this run: " + ", ".join(firsts) + ".", 118), _SECONDARY)
+        )
+    return lines
+
+
+def _bellwether_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
+    """Mirrors the digest's bellwether section (same numbers, same split) —
+    claims-labeled context, never gated."""
+    if not report.bellwethers:
+        return []
+    lines: list[tuple[str, str]] = []
+    reported = sorted(
+        (b for b in report.bellwethers if b.eps_actual is not None),
+        key=lambda b: (b.report_date, b.symbol),
+    )
+    upcoming = sorted(
+        (b for b in report.bellwethers if b.eps_actual is None),
+        key=lambda b: (b.report_date, b.symbol),
+    )
+    if reported:
+        lines.append(("Reported:", _SECONDARY))
+        for b in reported:
+            text = f"{b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
+            if b.eps_estimate is not None:
+                text += f" vs {b.eps_estimate:.2f} est"
+                if b.eps_estimate != 0:
+                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                    text += f" ({surprise:+.1f}%)"
+            lines.append(("   " + text, _INK))
+    if upcoming:
+        lines.append(("Upcoming:", _SECONDARY))
+        for b in upcoming:
+            when = b.report_date.isoformat() + (f" {b.hour}" if b.hour else "")
+            text = f"{b.symbol} — {when}"
+            if b.eps_estimate is not None:
+                text += f" (est {b.eps_estimate:.2f})"
+            lines.append(("   " + text, _INK))
+    lines.append(("Context only — single-source claims, never a delivery trigger.", _MUTED))
+    return lines
+
+
+def _quarantine_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
+    """Every quarantined observation this run (the digest table's content),
+    one line each — including legs coexisting with an accepted primary."""
+    lines: list[tuple[str, str]] = []
+    for ticker in sorted(report.tickers, key=lambda t: t.context.ticker):
+        for q in sorted(
+            ticker.quarantines, key=lambda q: (q.field.value, q.source.value, q.fetched_at)
+        ):
+            label = _FIELD_LABELS.get(q.field, q.field.value.replace("_", " "))
+            reasons = "; ".join(f"{hit.code.value}: {hit.detail}" for hit in q.reasons)
+            lines.append(
+                (
+                    _clip(f"{ticker.context.ticker} {label} ({q.source.value}): {reasons}", 118),
+                    _CRITICAL,
+                )
+            )
+    if not lines:
+        return [("No data quarantined this run.", _SECONDARY)]
     return lines
 
 

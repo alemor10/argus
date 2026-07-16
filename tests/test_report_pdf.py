@@ -372,7 +372,7 @@ class TestWatchPdf:
     def test_watch_kind_renders_one_page_per_ticker(self):
         pdf = build_pdf(_watch_report(), {"NVDA": _synthetic_history(base=150.0)})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 4  # summary + NVDA + NTDOY + TCEHY (failed still gets a page)
+        assert _page_count(pdf) == 5  # news + status pages + NVDA + NTDOY + TCEHY (failed still gets a page)
 
     def test_failed_ticker_and_quarantined_field_never_crash(self):
         # NTDOY's quarantined target and TCEHY's None snapshot are the
@@ -457,7 +457,7 @@ class TestBusinessBlock:
         report = report.model_copy(update={"tickers": (with_profile,) + report.tickers[1:]})
         pdf = build_pdf(report, {"NVDA": _synthetic_history(base=150.0)}, {"NVDA": _synthetic_revenue()})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 4
+        assert _page_count(pdf) == 5  # news + status + 3 tickers
 
     def test_identity_line_humanizes_employees(self):
         assert _identity_line(_profile()) == (
@@ -910,7 +910,7 @@ class TestScorecard:
         report = _watch_report().model_copy(update={"scorecard": _scorecard()})
         pdf = build_pdf(report, {"NVDA": _synthetic_history(base=150.0)})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 4
+        assert _page_count(pdf) == 5  # news + status + 3 tickers
 
 
 # --- Thesis checks (watch pages) --------------------------------------------
@@ -953,6 +953,104 @@ def _thesis_watch_report(checks, *, values=None, ticker="NVDA"):
         ),
     )
     return RunReport(run_id=9, kind="watch", as_of=NOW, status="complete", tickers=(target,))
+
+
+class TestPdfParity:
+    """v1.8 (PDF-first): the PDF carries the WHOLE digest — actual event
+    lines, the Macro strip, bellwethers, and the quarantine table — via
+    pure line helpers mirroring the markdown renderer."""
+
+    def test_changes_lines_carry_the_digest_event_lines(self):
+        from argus.report_pdf import _INK, _changes_pdf_lines
+
+        lines = _changes_pdf_lines(_watch_report())
+        assert (lines[0][0], lines[0][1]) == ("NVDA", _INK)
+        assert lines[1][0] == "   Price 170.00 → 181.25 (+6.6%, threshold 5.0%) vs 2026-06-28"
+        assert lines[2][0] == "   Earnings imminent: 2026-07-17 (in 5 days)"
+        # First-run tickers are named (baseline_run_id None, not failed).
+        assert any("Baseline established" in text for text, _tone in lines)
+
+    def test_no_events_reads_no_changes(self):
+        report = RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="complete",
+            tickers=(_ticker_report("NVDA", _garp_values(), baseline_run_id=4),),
+        )
+        from argus.report_pdf import _changes_pdf_lines
+
+        assert _changes_pdf_lines(report)[0][0] == "No changes since last run."
+
+    def test_macro_lines_mirror_the_digest_with_spread(self):
+        from argus.models import MacroSpec
+        from argus.report_pdf import _CRITICAL, _macro_pdf_lines
+
+        tnx = _ticker_report(
+            "^TNX", {Field.PRICE: _fv(Field.PRICE, 4.55)},
+            context=TickerContext(ticker="^TNX", macro=MacroSpec(label="US 10Y yield", unit="%")),
+        )
+        irx = _ticker_report(
+            "^IRX", {Field.PRICE: _fv(Field.PRICE, 3.69)},
+            context=TickerContext(ticker="^IRX", macro=MacroSpec(label="US 3M yield", unit="%")),
+        )
+        vix = _ticker_report(
+            "^VIX", {Field.PRICE: _fv(Field.PRICE, 45.4)},
+            context=TickerContext(
+                ticker="^VIX", macro=MacroSpec(label="VIX", sanity=(0.0, 40.0))
+            ),
+        )
+        report = RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="complete", tickers=(tnx, irx, vix),
+        )
+        lines = _macro_pdf_lines(report)
+        texts = [text for text, _tone in lines]
+        assert texts[0].startswith("US 10Y yield: 4.55%")
+        assert texts[1].startswith("US 3M yield: 3.69%")
+        assert "⚠ implausible" in texts[2] and lines[2][1] == _CRITICAL
+        assert texts[3] == "10Y − 3M spread: +0.86pp (derived at render from the two yields)"
+
+    def test_bellwether_lines_split_and_compute_surprise(self):
+        from argus.models import BellwetherEarning
+        from argus.report_pdf import _bellwether_pdf_lines
+
+        report = RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="complete",
+            tickers=(),
+            bellwethers=(
+                BellwetherEarning(
+                    symbol="MSFT", report_date=date(2026, 7, 10), hour="amc",
+                    eps_estimate=3.05, eps_actual=3.11,
+                ),
+                BellwetherEarning(
+                    symbol="NVDA", report_date=date(2026, 7, 15), hour="amc", eps_estimate=1.05,
+                ),
+            ),
+        )
+        texts = [text for text, _tone in _bellwether_pdf_lines(report)]
+        assert "   MSFT (2026-07-10): EPS 3.11 vs 3.05 est (+2.0%)" in texts
+        assert "   NVDA — 2026-07-15 amc (est 1.05)" in texts
+        assert _bellwether_pdf_lines(_watch_report()) == []  # no rows → no block
+
+    def test_quarantine_lines_list_every_observation(self):
+        from argus.models import QuarantinedObservation
+        from argus.report_pdf import _CRITICAL, _quarantine_pdf_lines
+
+        ntdoy = _ticker_report(
+            "NTDOY",
+            {Field.PRICE: _fv(Field.PRICE, 10.97)},
+            quarantines=(
+                QuarantinedObservation(
+                    field=Field.ANALYST_TARGET_MEAN, source=Source.YAHOO,
+                    fetched_at=NOW, reasons=(TARGET_HIT,),
+                ),
+            ),
+        )
+        report = RunReport(
+            run_id=9, kind="watch", as_of=NOW, status="partial", tickers=(ntdoy,),
+        )
+        [line] = _quarantine_pdf_lines(report)
+        assert line[1] == _CRITICAL
+        assert line[0].startswith("NTDOY Analyst target (mean) (yahoo): target_price_ratio:")
+        quiet = RunReport(run_id=9, kind="watch", as_of=NOW, status="complete", tickers=())
+        assert _quarantine_pdf_lines(quiet)[0][0] == "No data quarantined this run."
 
 
 class TestThesisChecks:
@@ -1042,7 +1140,7 @@ class TestThesisChecks:
         report = _thesis_watch_report(_MIXED_CHECKS)
         pdf = build_pdf(report, {"NVDA": _synthetic_history()})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # news + status + NVDA
 
     def test_thesis_bytes_are_deterministic(self):
         report = _thesis_watch_report(_MIXED_CHECKS)

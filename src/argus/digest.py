@@ -941,11 +941,13 @@ class EmailDigestSink:
 
 class DiscordDigestSink:
     """Posts a headline message (title, status, the Changes section) with the
-    full digest attached as a .md file to a Discord webhook. The headline is
-    distilled from the rendered markdown and capped well under Discord's
-    2,000-character message limit; the attachment carries the whole report.
-    HTTP failures raise; CompositeSink turns them into a disclosed delivery
-    failure rather than silence."""
+    report attached to a Discord webhook. PDF-first (v1.8): the attachments —
+    normally exactly the PDF report, which now carries the whole digest — ARE
+    the delivered artifact; the markdown record rides along only as the
+    fallback when no attachment exists (ARGUS_PDF=0 or a disclosed build
+    failure), because an attachment-less post would deliver nothing but the
+    headline. HTTP failures raise; CompositeSink turns them into a disclosed
+    delivery failure rather than silence."""
 
     def __init__(self, webhook_url: str) -> None:
         self.webhook_url = webhook_url
@@ -959,15 +961,19 @@ class DiscordDigestSink:
             "content": _discord_headline(markdown),
             "allowed_mentions": {"parse": []},  # a digest must never ping anyone
         }
-        files = {
-            "files[0]": (
-                f"digest-{as_of.isoformat()}-run{run_id}.md",
-                markdown.encode("utf-8"),
-                "text/markdown",
-            )
-        }
-        for index, attachment in enumerate(attachments[:9], start=1):  # webhook cap: 10 files
-            files[f"files[{index}]"] = (attachment.filename, attachment.content, attachment.mime)
+        if attachments:
+            files = {
+                f"files[{index}]": (a.filename, a.content, a.mime)
+                for index, a in enumerate(attachments[:10])  # webhook cap: 10 files
+            }
+        else:
+            files = {
+                "files[0]": (
+                    f"digest-{as_of.isoformat()}-run{run_id}.md",
+                    markdown.encode("utf-8"),
+                    "text/markdown",
+                )
+            }
         response = httpx.post(
             self.webhook_url,
             data={"payload_json": json.dumps(payload)},

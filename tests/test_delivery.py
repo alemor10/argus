@@ -82,6 +82,17 @@ class TestEmailDigestSink:
         assert smtp.started_tls
         assert smtp.sent
 
+    def test_pdf_attachment_rides_the_email(self):
+        from argus.digest import Attachment
+
+        pdf = Attachment("argus-watch-2026-07-13-run7.pdf", b"%PDF-1.4 fake", "application/pdf")
+        with patch("smtplib.SMTP_SSL", _FakeSMTP):
+            _sink().write("# digest body", run_id=7, as_of=AS_OF, attachments=(pdf,))
+        [message] = _FakeSMTP.instances[0].sent
+        [attachment] = list(message.iter_attachments())
+        assert attachment.get_filename() == "argus-watch-2026-07-13-run7.pdf"
+        assert attachment.get_content_type() == "application/pdf"
+
 
 class _FakeResponse:
     def __init__(self, status_code=200):
@@ -107,7 +118,9 @@ class TestDiscordDigestSink:
 
         return fake_post
 
-    def test_headline_plus_full_digest_attachment(self):
+    def test_headline_plus_markdown_fallback_when_no_attachments(self):
+        """PDF-first: with no attachments (ARGUS_PDF=0 / build failure) the
+        markdown record still attaches — delivery is never headline-only."""
         from argus.digest import DiscordDigestSink
 
         captured = {}
@@ -125,6 +138,24 @@ class TestDiscordDigestSink:
         filename, content, mime = captured["files"]["files[0]"]
         assert filename == "digest-2026-07-13-run9.md"
         assert content == self.DIGEST.encode("utf-8")
+
+    def test_pdf_is_the_delivered_artifact_when_present(self):
+        """PDF-first: the PDF (which carries the whole digest) is what
+        attaches; the .md file does not ride along."""
+        from argus.digest import Attachment, DiscordDigestSink
+
+        captured = {}
+        pdf = Attachment("argus-watch-2026-07-13-run9.pdf", b"%PDF-1.4 fake", "application/pdf")
+        with patch("httpx.post", self._post(captured)):
+            DiscordDigestSink("https://discord.example/webhook").write(
+                self.DIGEST, run_id=9, as_of=AS_OF, attachments=(pdf,)
+            )
+        assert list(captured["files"]) == ["files[0]"]
+        filename, content, mime = captured["files"]["files[0]"]
+        assert filename == "argus-watch-2026-07-13-run9.pdf"
+        assert mime == "application/pdf"
+        payload = __import__("json").loads(captured["data"]["payload_json"])
+        assert "+6.6%" in payload["content"]  # the headline text still carries the hook
 
     def test_headline_respects_discord_message_limit(self):
         from argus.digest import DiscordDigestSink, _discord_headline
