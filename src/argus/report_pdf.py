@@ -211,12 +211,9 @@ def build_pdf(
             # table, quarantines, data health — skipped when there is no
             # state to show, its health block riding the wire page instead),
             # then the per-ticker detail pages.
-            desk = [t for t in report.tickers if t.context.macro is None]
-            has_state = bool(desk) or any(t.quarantines for t in report.tickers)
             if report.market is not None:
-                _save(pdf, _market_wire_page(report, include_health=not has_state))
-            if has_state or report.market is None:
-                _save(pdf, _watch_status_page(report))
+                _save(pdf, _market_wire_page(report))
+            _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
     return buffer.getvalue()
@@ -888,20 +885,19 @@ def _watch_status_page(report: RunReport) -> Figure:
     cur = _Cursor(fig)
     _watch_summary(fig, cur, report)
     cur.gap(0.016)
+    if report.market is not None:
+        _block(cur, "New 52-week extremes", _extremes_pdf_lines(report.market), 20)
     _block(cur, "Data quarantined", _quarantine_pdf_lines(report), _MAX_QUARANTINE_LINES)
-    cur.line("Data health", size=11, weight="bold")
-    cur.gap(0.008)
-    for text, tone in _health_lines(report):
-        cur.line(text, size=8.5, color=tone)
+    _block(cur, "Data health", _health_lines(report), 12)
     _page_footer(fig, report)
     return fig
 
 
-def _market_wire_page(report: RunReport, *, include_health: bool = False) -> Figure:
+def _market_wire_page(report: RunReport) -> Figure:
     """The magazine's market pages: movers and sector rotation as charts,
-    the earnings wire and 52-week extremes as colored lists — all
-    claims-labeled, curated by the mechanical rules in market.py. Carries
-    the data-health block when the state page is skipped (empty desk)."""
+    the earnings wire as a colored list — claims-labeled, curated by the
+    mechanical rules in market.py. The 52-week extremes live on the state
+    page, where there is room to list them all."""
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
     cur.line("The market, last session", size=13, weight="bold")
@@ -910,14 +906,7 @@ def _market_wire_page(report: RunReport, *, include_health: bool = False) -> Fig
     assert wire is not None  # build_pdf only routes here when present
     _movers_chart(fig, cur, wire)
     _sector_chart(fig, cur, wire)
-    _block(cur, "Earnings wire", _earnings_wire_pdf_lines(wire), 15)
-    _block(cur, "New 52-week extremes", _extremes_pdf_lines(wire), 10)
-    if include_health:
-        cur.line("Data health", size=11, weight="bold")
-        cur.gap(0.006)
-        for text, tone in _health_lines(report):
-            cur.line(text, size=8, color=tone)
-        cur.gap(0.008)
+    _block(cur, "Earnings wire", _earnings_wire_pdf_lines(wire), 20)
     cur.line(
         "Claims-labeled context (tradingview + finnhub), mechanical curation — "
         "never gated, never a delivery trigger.",

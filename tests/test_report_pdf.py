@@ -1075,15 +1075,15 @@ class TestMarketWirePage:
         pdf = build_pdf(report, {})
         assert _page_count(pdf) == 6  # news + wire + status + 3 tickers
 
-    def test_empty_desk_magazine_skips_the_state_page(self):
-        """No watch tickers and no quarantines → news + wire only; the
-        data-health block rides the wire page instead of a near-blank page."""
+    def test_empty_desk_magazine_state_page_hosts_extremes_and_health(self):
+        """Even with no watch tickers the state page prints — it carries the
+        52-week extremes, quarantine table, and data health."""
         report = RunReport(
             run_id=9, kind="watch", as_of=NOW, status="complete",
             tickers=(), market=self._wire(),
         )
         pdf = build_pdf(report, {})
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # news + wire + state
 
     def test_dashboard_sparkline_page_renders_with_history(self):
         from argus.models import MacroSpec
