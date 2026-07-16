@@ -55,6 +55,7 @@ from argus.digest import (
     _feature_fact_lines as _digest_feature_fact_lines,
     _event_line as _digest_event_line,
     _radar_crossings as _digest_radar_crossings,
+    _radar_insider_crossings as _digest_radar_insider_crossings,
     _spread_lines as _digest_spread_lines,
     # ...and the shared formatters/formula — ONE source each, for the same
     # reason (a divergence would be the two artifacts disagreeing on a number).
@@ -925,6 +926,8 @@ def _radar_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
         ]
     for hit in _digest_radar_crossings(report.radar, report.market):
         lines.append((_clip(hit.removeprefix("- "), 114), _CRITICAL))
+    for hit in _digest_radar_insider_crossings(report):
+        lines.append((_clip(hit.removeprefix("- "), 114), _UP))
     considering = [
         t for t in report.tickers
         if t.context.macro is None and t.context.tier == "consider"

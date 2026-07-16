@@ -351,6 +351,8 @@ def has_new_information(report: "RunReport") -> bool:
     mode of gating is silence, so anything ambiguous delivers."""
     if report.etf_rebalances:  # a well-known ETF changed constituents — forced-flow news
         return True
+    if report.radar_insider:  # insiders buying a name scout flagged — high signal
+        return True
     for ticker in report.tickers:
         if ticker.status == "failed":
             return True

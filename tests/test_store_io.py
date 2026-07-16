@@ -575,6 +575,39 @@ def test_insider_buys_dedup_and_new_since_run(con):
     assert [x.accession for x in queries.new_insider_transactions(con, r2, "NVDA")] == ["A-2"]
 
 
+def test_radar_insider_surfaces_shortlist_buys_excluding_watched(con):
+    from datetime import date
+
+    from argus.models import InsiderTransaction, ScoutCandidateRecord
+
+    # A prior scout run proposes NVDA (shortlist) and AAPL (also shortlist).
+    scout_run = _begin(con, started_at=T0, kind="scout")
+    writer.finish_run(con, run_id=scout_run, status="complete", finished_at=T0)
+    writer.write_scout_candidates(con, run_id=scout_run, records=[
+        ScoutCandidateRecord(ticker="NVDA", rank=1, status="proposed",
+                             screen_reasons={}, screener_metrics={}),
+        ScoutCandidateRecord(ticker="AAPL", rank=2, status="proposed",
+                             screen_reasons={}, screener_metrics={}),
+    ])
+
+    # A watch run where AAPL is ALSO watched (so its buys go per-ticker, not radar).
+    watch = _begin(con, started_at=T1)
+    _write(con, watch, ticker="AAPL")  # AAPL on the watchlist this run
+    def buy(ticker, acc):
+        return InsiderTransaction(
+            ticker=ticker, accession=acc, filing_date=date(2026, 7, 12),
+            transaction_date=date(2026, 7, 11), owner="Jane Director", role="director",
+            shares=5000.0, price=181.0, source=Source.EDGAR, fetched_at=T1)
+    writer.write_insider_transactions(con, run_id=watch, insider=[buy("NVDA", "n-1")])
+    writer.write_insider_transactions(con, run_id=watch, insider=[buy("AAPL", "a-1")])
+    writer.finish_run(con, run_id=watch, status="complete", finished_at=T1)
+
+    report = queries.run_report(con, watch)
+    # NVDA (shortlist, not watched) surfaces as a radar-insider crossing;
+    # AAPL (watched) does not — its buy belongs to its own Changes.
+    assert [x.ticker for x in report.radar_insider] == ["NVDA"]
+
+
 # --- events + run_report ------------------------------------------------------
 
 

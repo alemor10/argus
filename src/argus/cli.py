@@ -185,10 +185,13 @@ series:
 bellwethers: [AAPL, MSFT, NVDA, GOOGL, AMZN, META, AVGO, TSLA, BRK-B, JPM]
 
 # Well-known ETFs to watch for rebalancing — Argus snapshots each one's daily
-# holdings (SSGA/SPDR feed) and reports when constituents are added or dropped
-# (an index add is forced buying). SPDR funds only for now: SPY (S&P 500), DIA
-# (Dow), and the eleven sector SPDRs. Empty list turns the feature off.
-etfs: [SPY, DIA, XLK, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLB, XLRE, XLC]
+# holdings and reports when constituents are added or dropped (an index add is
+# forced buying). Two issuer feeds: SPDR (SPY, DIA, sector XL*, SDY, MDY, …)
+# and Vanguard (VOO, VTI, VYM, VUG, …). SCHD is Schwab (blocks headless) — use
+# SDY or VYM as dividend stand-ins. An unsupported ticker is skipped with a
+# note. Empty list turns the feature off.
+etfs: [SPY, DIA, XLK, XLF, XLE, XLV, XLI, XLY, XLP, XLU, XLB, XLRE, XLC,
+       VOO, VTI, VYM, VUG, SDY]
 """
 
 CONSIDER_TEMPLATE = """\
@@ -388,11 +391,16 @@ def _etf_step(etfs: tuple[str, ...]):
         return None
 
     def step(con, run_id: int) -> None:
-        from argus.etf import SsgaHoldingsSource, membership_diff
+        from argus.etf import holdings_source_for, membership_diff
 
-        source = SsgaHoldingsSource()
         for etf in etfs:
             symbol = etf.strip().upper()
+            source = holdings_source_for(symbol)
+            if source is None:  # no issuer feed for this ticker — disclosed, not guessed
+                writer.append_run_note(
+                    con, run_id=run_id, note=f"no holdings feed for {symbol} (unsupported issuer)"
+                )
+                continue
             try:
                 current = source.fetch(symbol)
             except Exception as exc:
@@ -407,6 +415,39 @@ def _etf_step(etfs: tuple[str, ...]):
             added, dropped = membership_diff(prior, current)
             if added or dropped:  # store only on change — the change-log model
                 writer.write_etf_holdings(con, run_id=run_id, etf=symbol, holdings=current)
+
+    return step
+
+
+def _insider_radar_step():
+    """before_digest hook: fetch insider open-market buys for the scout
+    shortlist names Argus is already surfacing (the 'anything of interest'
+    set), excluding watchlist/consider names the engine already covered.
+    Makes insider buying live without a promoted watchlist. Needs EDGAR
+    configured; best-effort — a Form 4 outage yields no buys, never blocks."""
+    from argus.store import queries, writer
+
+    contact = resolve_secrets().edgar_contact_email
+    if not contact:
+        return None
+
+    def step(con, run_id: int) -> None:
+        shortlist = {p.ticker for p in queries._radar_shortlist(con, run_id)}
+        if not shortlist:
+            return
+        watched = {
+            row["ticker"]
+            for row in con.execute("SELECT ticker FROM run_tickers WHERE run_id = ?", (run_id,))
+        }
+        source = EdgarSource(contact)
+        for ticker in sorted(shortlist - watched):
+            if not source.covers(ticker):
+                continue  # not an EDGAR filer (OTC ADR / ETF)
+            buys = source.insider_buys(ticker)
+            if buys:
+                # No per-ticker row for these shortlist names — write a
+                # minimal run_tickers-free path: insider rows only.
+                writer.write_insider_transactions(con, run_id=run_id, insider=buys)
 
     return step
 
@@ -530,6 +571,7 @@ def watch(
             before_digest=_compose_before_digest(
                 _market_wire_step(macro_config.bellwethers, deliver),
                 _etf_step(macro_config.etfs),
+                _insider_radar_step(),
             ),
         )
     finally:

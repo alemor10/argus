@@ -86,6 +86,15 @@ class EdgarSource:
             insider = ()
         return result.model_copy(update={"insider_transactions": insider})
 
+    def insider_buys(self, ticker: str) -> tuple[InsiderTransaction, ...]:
+        """Recent insider open-market purchases for a ticker — the public,
+        best-effort entry the shortlist step uses for names NOT in the watch
+        engine. Never raises: a Form 4 outage yields no buys."""
+        try:
+            return self._fetch_form4s(ticker, datetime.now(UTC))
+        except Exception:
+            return ()
+
     def _fetch_form4s(
         self, ticker: str, fetched_at: AwareDatetime
     ) -> tuple[InsiderTransaction, ...]:

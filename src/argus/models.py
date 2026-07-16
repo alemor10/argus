@@ -862,4 +862,5 @@ class RunReport(BaseModel):
     bellwethers: tuple[BellwetherEarning, ...] = ()  # pre-v1.9 runs' market context (claims)
     market: MarketWire | None = None  # the magazine issue's market pages (claims)
     radar: tuple[ScoutProposal, ...] = ()  # latest scout shortlist (watch runs; claims+gated)
+    radar_insider: tuple[InsiderTransaction, ...] = ()  # new insider buys on shortlist names
     etf_rebalances: tuple[EtfRebalance, ...] = ()  # well-known ETF membership changes (claims)

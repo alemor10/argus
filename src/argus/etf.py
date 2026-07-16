@@ -6,13 +6,20 @@ signal, and it works whether or not you hold the ETF. Argus watches a
 configured set of ETFs, snapshots their membership, and reports the diff:
 who entered, who left.
 
-Data source: the SSGA / State Street SPDR daily-holdings feed (one uniform
-xlsx per fund — verified live 2026-07-16, covers SPY, DIA, and the eleven
-sector SPDRs). Accepted eyes-open the same way yfinance and the TV scanner
-are — unofficial, one-module blast radius behind this file; it gives tickers
-directly, so the CUSIP→ticker join that makes N-PORT painful is skipped
-entirely. Holdings are CLAIMS: never gated, never observations, never a
-delivery trigger by themselves; only the membership diff (an event) is.
+Data sources (verified live 2026-07-16), one adapter per issuer behind the
+HoldingsSource protocol; `holdings_source_for` routes each ETF by a known
+map:
+  - SSGA / State Street SPDR — one uniform daily-holdings xlsx per fund
+    (SPY, DIA, the eleven sector SPDRs, SDY, MDY, style/size funds).
+  - Vanguard — the investor.vanguard.com portfolio-holding JSON per fund
+    (VOO, VTI, VYM, VUG, …), full membership by ticker.
+Both accepted eyes-open the same way yfinance and the TV scanner are —
+unofficial, one-module blast radius behind this file — and both give tickers
+directly, so the CUSIP→ticker join that makes N-PORT painful is skipped.
+(Schwab blocks headless requests, so SCHD is not routable; SDY/VYM are the
+dividend-strategy stand-ins.) Holdings are CLAIMS: never gated, never
+observations, never a delivery trigger by themselves; only the membership
+diff (an event) is.
 
 Storage is a change-log, not a daily dump: a holdings snapshot is persisted
 only when membership actually changes (the analyst-actions "first-seen"
@@ -131,6 +138,88 @@ class SsgaHoldingsSource:
         return holdings
 
 
+class VanguardHoldingsSource:
+    """One GET of a Vanguard fund's portfolio-holding JSON per ETF."""
+
+    _URL = (
+        "https://investor.vanguard.com/investment-products/etfs/profile/api/"
+        "{etf}/portfolio-holding/stock"
+    )
+
+    def __init__(self, timeout: float = 30.0) -> None:
+        self.timeout = timeout
+
+    def fetch(self, etf: str) -> list[EtfHolding]:
+        try:
+            payload = self._fetch_raw(etf)
+        except Exception:
+            try:
+                payload = self._fetch_raw(etf)
+            except Exception as exc:
+                raise HoldingsError(f"vanguard: holdings fetch failed for {etf}: {exc}") from exc
+        return self.parse(payload, etf)
+
+    def _fetch_raw(self, etf: str) -> object:
+        response = httpx.get(
+            self._URL.format(etf=etf.upper()),
+            params={"start": 1, "count": 5000},  # one page for any fund
+            headers={"User-Agent": _USER_AGENT, "Accept": "application/json"},
+            timeout=self.timeout,
+            follow_redirects=True,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    def parse(self, payload: object, etf: str) -> list[EtfHolding]:
+        """Pure. fund.entity[] carries one row per holding with a ticker and
+        percentWeight (a string). Rows without a real ticker (cash, futures)
+        are skipped; an unrecognized body or zero constituents raises."""
+        if not isinstance(payload, dict):
+            raise HoldingsError(f"vanguard: {etf} body is not JSON object")
+        entities = payload.get("fund", {}).get("entity")
+        if not isinstance(entities, list):
+            raise HoldingsError(f"vanguard: {etf} body has no fund.entity list — changed shape")
+        holdings: list[EtfHolding] = []
+        for row in entities:
+            if not isinstance(row, dict):
+                continue
+            ticker = _normalize(row.get("ticker"))
+            if ticker is None:
+                continue
+            holdings.append(
+                EtfHolding(
+                    ticker=ticker,
+                    weight=_num(row.get("percentWeight")),
+                    name=_clean(row.get("longName")) or None,
+                )
+            )
+        if not holdings:
+            raise HoldingsError(f"vanguard: {etf} parsed to zero constituents")
+        return holdings
+
+
+# Which issuer feed serves each ETF. Extend as issuers are added; an ETF not
+# here is skipped with a disclosed note (Argus never guesses a feed).
+_SSGA_ETFS = frozenset(
+    "SPY DIA XLK XLF XLE XLV XLI XLY XLP XLU XLB XLRE XLC "
+    "SDY MDY SPLG SPYG SPYV SPSM XBI KRE XHB XRT XME XOP".split()
+)
+_VANGUARD_ETFS = frozenset(
+    "VOO VTI VUG VTV VYM VIG VGT VNQ VO VB VBR VEA VWO VXUS VT BND".split()
+)
+
+
+def holdings_source_for(etf: str) -> HoldingsSource | None:
+    """The issuer adapter that serves this ETF, or None when Argus has no
+    feed for it (disclosed by the caller, never guessed)."""
+    symbol = etf.strip().upper()
+    if symbol in _SSGA_ETFS:
+        return SsgaHoldingsSource()
+    if symbol in _VANGUARD_ETFS:
+        return VanguardHoldingsSource()
+    return None
+
+
 def membership_diff(
     prev: Sequence[EtfHolding], curr: Sequence[EtfHolding]
 ) -> tuple[tuple[str, ...], tuple[str, ...]]:
@@ -155,7 +244,11 @@ def _normalize(raw: object) -> str | None:
 
 
 def _num(raw: object) -> float:
-    if isinstance(raw, bool) or not isinstance(raw, (int, float)):
+    """Weights arrive as floats (SSGA xlsx) or strings (Vanguard JSON)."""
+    if isinstance(raw, bool):
         return 0.0
-    value = float(raw)
-    return value if value == value else 0.0  # NaN guard
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.0
+    return value if value == value and abs(value) != float("inf") else 0.0  # NaN/inf guard

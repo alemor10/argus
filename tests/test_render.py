@@ -471,6 +471,25 @@ class TestRadarSection:
         assert "- ONON: 37.46 · fwd P/E 17.5" in out
         assert "_Considering — promote with a thesis to graduate._" in out
 
+    def test_insider_buying_crossing_on_shortlist(self):
+        from argus.models import InsiderTransaction, ScoutProposal
+
+        report = RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(_quiet_ticker(),),
+            radar=(ScoutProposal(ticker="NVDA", rank=3, status="proposed",
+                                 sector="Technology", screen_reasons={}, screener_metrics={},
+                                 streak=6),),
+            radar_insider=(
+                InsiderTransaction(ticker="NVDA", accession="n-1", filing_date=date(2026, 7, 12),
+                                   transaction_date=date(2026, 7, 11), owner="Jane Director",
+                                   role="director", shares=5000.0, price=181.0,
+                                   source=Source.EDGAR, fetched_at=NOW),
+            ),
+        )
+        out = render(report)
+        assert "⚡ NVDA (shortlist, 6w) insider buying: Jane Director (director) — 5,000 sh across 1 filing(s)" in out
+
     def test_no_radar_no_section(self):
         out = render(_report([_quiet_ticker()]))
         assert "## Radar" not in out

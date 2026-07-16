@@ -312,6 +312,35 @@ def write_market_wire(con: sqlite3.Connection, *, run_id: int, wire: "MarketWire
         )
 
 
+def write_insider_transactions(
+    con: sqlite3.Connection, *, run_id: int, insider: Sequence[InsiderTransaction]
+) -> None:
+    """Persist insider buys for names WITHOUT a run_tickers row (scout
+    shortlist crossings). Same INSERT OR IGNORE + first_seen_run_id as the
+    per-ticker path in write_ticker_result — one home for the statement."""
+    with con:
+        for x in insider:
+            con.execute(
+                """INSERT OR IGNORE INTO insider_transactions
+                     (ticker, accession, transaction_date, shares, filing_date,
+                      owner, role, price, source, fetched_at, first_seen_run_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    x.ticker,
+                    x.accession,
+                    x.transaction_date.isoformat(),
+                    x.shares,
+                    x.filing_date.isoformat(),
+                    x.owner,
+                    x.role,
+                    x.price,
+                    x.source.value,
+                    x.fetched_at.isoformat(),
+                    run_id,
+                ),
+            )
+
+
 def write_etf_holdings(
     con: sqlite3.Connection, *, run_id: int, etf: str, holdings: Sequence[EtfHolding]
 ) -> None:

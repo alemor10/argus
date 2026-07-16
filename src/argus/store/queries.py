@@ -356,8 +356,27 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
         bellwethers=_bellwether_earnings(con, run_id) if run["kind"] == "watch" else (),
         market=_market_wire(con, run_id) if run["kind"] == "watch" else None,
         radar=_radar_shortlist(con, run_id) if run["kind"] == "watch" else (),
+        radar_insider=_radar_insider(con, run_id) if run["kind"] == "watch" else (),
         etf_rebalances=_etf_rebalances(con, run_id) if run["kind"] == "watch" else (),
     )
+
+
+def _radar_insider(con: sqlite3.Connection, run_id: int) -> tuple[InsiderTransaction, ...]:
+    """Insider buys first seen THIS run on shortlist names — the discovery
+    crossing 'a name scout flagged is being bought by its insiders'. Excludes
+    names on the watchlist/consider tier, whose buys already surface in their
+    own per-ticker Changes."""
+    shortlist = {p.ticker for p in _radar_shortlist(con, run_id)}
+    if not shortlist:
+        return ()
+    watched = {
+        row["ticker"]
+        for row in con.execute("SELECT ticker FROM run_tickers WHERE run_id = ?", (run_id,))
+    }
+    out: list[InsiderTransaction] = []
+    for ticker in sorted(shortlist - watched):
+        out.extend(new_insider_transactions(con, run_id, ticker))
+    return tuple(out)
 
 
 def latest_etf_holdings(

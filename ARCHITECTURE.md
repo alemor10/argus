@@ -853,17 +853,23 @@ event-shaped (schema v11, `insider_transactions`, first-seen dedup like
 analyst_actions; a ticker's first run is baseline, not news) and surfaced as
 `InsiderActivity` change events in the per-ticker Changes — so it rides the
 existing per-ticker event machinery (no new top-level section) and the shared
-`_event_line`. Dormant until names are held, like thesis drift.
+`_event_line`. Also surfaced on the SCOUT SHORTLIST (v1.15.1): a before_digest step fetches
+Form 4 buys for shortlist names Argus already flags (excluding watchlist/
+consider, whose buys ride their own Changes), stored the same way and
+rendered as a Radar crossing ("⚡ NVDA insider buying: …") — so the signal is
+live without a promoted watchlist. Watchlist names stay dormant until held.
 
 ## ETF rebalancing — v1.14
 
 Knowing a well-known ETF is rebalancing is forced-flow signal (an index add
 means index funds MUST buy), and it works whether or not you hold the ETF.
-`etf.py` fetches a configured set of ETFs' membership from the SSGA/SPDR
-daily-holdings xlsx (`macro.yaml`'s `etfs:` list — SPY, DIA, the 11 sector
-SPDRs), behind a `HoldingsSource` protocol (iShares/Vanguard/N-PORT slot in
-later). The feed gives tickers directly, so the CUSIP→ticker join that made
-N-PORT "the hardest data-eng piece" is skipped.
+`etf.py` fetches a configured set of ETFs' membership behind a
+`HoldingsSource` protocol, routed per fund by `holdings_source_for`: SPDR
+funds via the SSGA daily-holdings xlsx (SPY, DIA, sector XL*, SDY, MDY),
+Vanguard funds via the investor.vanguard.com JSON (VOO, VTI, VYM, VUG). Both
+give tickers directly, so the CUSIP→ticker join that made N-PORT "the
+hardest data-eng piece" is skipped. (Schwab blocks headless, so SCHD is not
+routable — an unsupported ticker is skipped with a disclosed note.)
 
 Storage is a change-log, not a daily dump: a holdings blob is persisted only
 when membership changed since the last snapshot (schema v10, `etf_holdings`;

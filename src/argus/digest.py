@@ -518,6 +518,7 @@ def _radar_section(report: RunReport, considering: Sequence[TickerReport]) -> li
         ]
         lines.append("")
     crossings = _radar_crossings(report.radar, report.market)
+    crossings += _radar_insider_crossings(report)
     if crossings:
         lines += crossings
         lines.append("")
@@ -529,6 +530,29 @@ def _radar_section(report: RunReport, considering: Sequence[TickerReport]) -> li
         "_Mechanical joins of persisted data — the shortlist is scout's, the crossings "
         "are rule-based, and only you move a name up a tier._"
     )
+    return lines
+
+
+def _radar_insider_crossings(report: RunReport) -> list[str]:
+    """The highest-signal Radar crossing: a name scout flagged is being bought
+    by its own insiders. Grouped per ticker (a cluster of buyers reads as one
+    line), with the shortlist streak for context."""
+    if not report.radar_insider:
+        return []
+    streaks = {p.ticker: p.streak for p in report.radar}
+    by_ticker: dict[str, list] = {}
+    for buy in report.radar_insider:
+        by_ticker.setdefault(buy.ticker, []).append(buy)
+    lines = []
+    for ticker in sorted(by_ticker):
+        buys = by_ticker[ticker]
+        owners = ", ".join(sorted({f"{b.owner} ({b.role})" for b in buys}))
+        total = sum(b.shares for b in buys)
+        streak = f", {streaks[ticker]}w" if streaks.get(ticker) else ""
+        lines.append(
+            f"- ⚡ {ticker} (shortlist{streak}) insider buying: {owners} — "
+            f"{total:,.0f} sh across {len(buys)} filing(s)"
+        )
     return lines
 
 

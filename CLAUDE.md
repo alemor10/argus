@@ -111,7 +111,7 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       behind the HoldingsSource protocol later. See ARCHITECTURE.md, ETF
       rebalancing.
 - [x] Insider buys (v1.15, 2026-07-16): Form 4 open-market purchases (code P)
-      by officers/directors on watchlist + consider names — realized filed
+      by officers/directors on watchlist + consider names AND the scout shortlist (Radar crossing) — realized filed
       data, event-shaped like analyst actions (first-seen; first-run history
       is baseline). Rides EdgarSource as a best-effort secondary channel;
       grants/options/sales filtered at the adapter. Dormant until names held.
