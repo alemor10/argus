@@ -688,7 +688,7 @@ def _featured_section(wire: MarketWire) -> list[str]:
         if card.summary:
             lines += ["", card.summary]
         lines.append("")
-    lines.append("_Selection is mechanical (top mover each way, largest upcoming reporter)._")
+    lines.append("_Selection is mechanical (top two movers each way, two largest upcoming reporters)._")
     return lines
 
 

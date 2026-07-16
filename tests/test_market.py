@@ -163,9 +163,10 @@ class TestFeatureSelection:
         ]
         wire = build_wire(rows, calendar, today=TODAY)
         picks = select_features(wire)
-        assert [symbol for symbol, _why in picks] == ["UP", "DOWN", "BIGREP"]
+        assert [symbol for symbol, _why in picks] == ["UP", "DOWN", "BIGREP", "SMALLREP"]
         assert "biggest large-cap gainer: +8.0%" in picks[0][1]
         assert "Largest company reporting next" in picks[2][1]
+        assert "Second-largest company reporting next" in picks[3][1]
 
     def test_dedupe_and_flat_day(self):
         from argus.market import select_features

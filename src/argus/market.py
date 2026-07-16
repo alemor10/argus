@@ -282,27 +282,33 @@ def _earnings_wire(
     return reported[:EARNINGS_REPORTED_SHOWN], upcoming[:EARNINGS_UPCOMING_SHOWN], more
 
 
+FEATURES_SHOWN = 6  # top two movers each way + the two largest upcoming reporters
+
+
 def select_features(wire: MarketWire) -> list[tuple[str, str]]:
     """The issue's reading material, picked by DISCLOSED mechanical rules —
-    never judgment: yesterday's biggest large-cap gainer, biggest loser, and
-    the largest company reporting today. Returns (symbol, why) pairs,
-    deduped, at most three."""
+    never judgment: the top TWO large-cap gainers and losers, and the two
+    largest companies reporting next. Returns (symbol, why) pairs, deduped,
+    at most FEATURES_SHOWN."""
     picks: list[tuple[str, str]] = []
-    if wire.gainers:
-        m = wire.gainers[0]
+    ordinal = ("biggest", "second-biggest")
+    for i, m in enumerate(wire.gainers[:2]):
         picks.append(
-            (m.symbol, f"Yesterday's biggest large-cap gainer: {m.change_pct:+.1f}% to {m.close:.2f}")
+            (m.symbol,
+             f"Yesterday's {ordinal[i]} large-cap gainer: {m.change_pct:+.1f}% to {m.close:.2f}")
         )
-    if wire.losers:
-        m = wire.losers[0]
+    for i, m in enumerate(wire.losers[:2]):
         picks.append(
-            (m.symbol, f"Yesterday's biggest large-cap loser: {m.change_pct:+.1f}% to {m.close:.2f}")
+            (m.symbol,
+             f"Yesterday's {ordinal[i]} large-cap loser: {m.change_pct:+.1f}% to {m.close:.2f}")
         )
-    reporters = [e for e in wire.earnings_upcoming if e.market_cap is not None]
-    if reporters:
-        top = max(reporters, key=lambda e: e.market_cap)
+    reporters = sorted(
+        (e for e in wire.earnings_upcoming if e.market_cap is not None),
+        key=lambda e: -e.market_cap,
+    )
+    for rank, top in enumerate(reporters[:2]):
         when = top.report_date.isoformat() + (f" {top.hour}" if top.hour else "")
-        why = f"Largest company reporting next: {when}"
+        why = ("Largest" if rank == 0 else "Second-largest") + f" company reporting next: {when}"
         if top.eps_estimate is not None:
             why += f", street at {top.eps_estimate:.2f}"
         picks.append((top.symbol, why))
@@ -312,7 +318,7 @@ def select_features(wire: MarketWire) -> list[tuple[str, str]]:
         if symbol.upper() not in seen:
             seen.add(symbol.upper())
             unique.append((symbol, why))
-    return unique[:3]
+    return unique[:FEATURES_SHOWN]
 
 
 def fetch_feature_card(symbol: str, why: str, rows_by_symbol: Mapping[str, MarketRow]) -> FeatureCard:

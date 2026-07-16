@@ -214,8 +214,14 @@ def build_pdf(
             # then the per-ticker detail pages.
             if report.market is not None:
                 _save(pdf, _market_wire_page(report))
-                if report.market.features:
-                    _save(pdf, _featured_page(report, history))
+                features = report.market.features
+                for start in range(0, len(features), 3):  # 3 cards per page
+                    _save(
+                        pdf,
+                        _featured_page(
+                            report, history, features[start : start + 3], first=start == 0
+                        ),
+                    )
             _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
@@ -1031,23 +1037,23 @@ def _extremes_pdf_lines(wire) -> list[tuple[str, str]]:
     return lines
 
 
-def _featured_page(report: RunReport, history: History) -> Figure:
+def _featured_page(report: RunReport, history: History, cards, *, first: bool = True) -> Figure:
     """Worth reading about: the featured cards — who the companies are, why
     they surfaced (mechanical rules), their claimed numbers, and a 1-year
-    price strip (raw history, ungated — captioned as such)."""
+    price strip (raw history, ungated — captioned as such). Three cards per
+    page; further cards continue on the next."""
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
-    cur.line("Worth reading about", size=13, weight="bold")
+    cur.line("Worth reading about" + ("" if first else " (continued)"), size=13, weight="bold")
     cur.gap(0.006)
-    cur.line(
-        "Selection is mechanical — top mover each way, largest upcoming reporter. "
-        "All numbers are yahoo claims, unverified.",
-        size=8, color=_MUTED, style="italic",
-    )
+    if first:
+        cur.line(
+            "Selection is mechanical — top two movers each way, two largest upcoming "
+            "reporters. All numbers are yahoo claims, unverified.",
+            size=8, color=_MUTED, style="italic",
+        )
     cur.gap(0.014)
-    wire = report.market
-    assert wire is not None
-    for card in wire.features:
+    for card in cards:
         if cur.y < _PAGE_FLOOR + 0.26:  # a full card's height — no partial cards
             break
         title = card.symbol + (f" — {card.name}" if card.name else "")
