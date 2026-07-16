@@ -839,6 +839,22 @@ numbers; persisted inside the market_wire blob so issues reproduce. Digest
 section + a dedicated PDF page ("Worth reading about"). Argus curates by
 rule and never editorializes.
 
+## Insider buys — v1.15
+
+Open-market purchases by insiders (Form 4, transaction code P) are a
+high-signal event — an officer/director buying with their own money — and
+free from EDGAR. For watchlist + consider names, `EdgarSource` fetches recent
+Form 4s (submissions JSON → each filing's ownership XML, bounded to a 45-day
+window capped at 20) as a SECONDARY, best-effort channel: a Form 4 outage
+degrades to no transactions, never breaking the fundamentals cross-check on
+the same source. `parse_form4` keeps only code-P purchases — grants (A),
+option exercises (M), and sales (S) are filtered at the adapter. Stored
+event-shaped (schema v11, `insider_transactions`, first-seen dedup like
+analyst_actions; a ticker's first run is baseline, not news) and surfaced as
+`InsiderActivity` change events in the per-ticker Changes — so it rides the
+existing per-ticker event machinery (no new top-level section) and the shared
+`_event_line`. Dormant until names are held, like thesis drift.
+
 ## ETF rebalancing — v1.14
 
 Knowing a well-known ETF is rebalancing is forced-flow signal (an index add

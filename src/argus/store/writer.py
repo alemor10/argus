@@ -29,6 +29,7 @@ from argus.models import (
     EarningsResultRecord,
     EtfHolding,
     GatedObservation,
+    InsiderTransaction,
     MarketWire,
     ParseFailure,
     ScorecardMark,
@@ -95,6 +96,7 @@ def write_ticker_result(
     error: str | None = None,
     company_profile: CompanyProfile | None = None,
     earnings: Sequence[EarningsResultRecord] = (),
+    insider: Sequence[InsiderTransaction] = (),
 ) -> None:
     """ONE transaction: observations (accepted AND quarantined), analyst
     actions and earnings results (INSERT OR IGNORE, first_seen_run_id=run_id),
@@ -159,6 +161,29 @@ def write_ticker_result(
                     e.eps_estimate,
                     e.source.value,
                     e.fetched_at.isoformat(),
+                    run_id,
+                ),
+            )
+        for x in insider:
+            # OR IGNORE on the natural key: a re-fetched Form 4 keeps its
+            # first_seen_run_id, so "new insider buy since last run" is a
+            # set-membership fact (the analyst_actions precedent).
+            con.execute(
+                """INSERT OR IGNORE INTO insider_transactions
+                     (ticker, accession, transaction_date, shares, filing_date,
+                      owner, role, price, source, fetched_at, first_seen_run_id)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    x.ticker,
+                    x.accession,
+                    x.transaction_date.isoformat(),
+                    x.shares,
+                    x.filing_date.isoformat(),
+                    x.owner,
+                    x.role,
+                    x.price,
+                    x.source.value,
+                    x.fetched_at.isoformat(),
                     run_id,
                 ),
             )

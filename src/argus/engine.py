@@ -30,6 +30,7 @@ from argus.models import (
     AnalystActionRecord,
     CompanyProfile,
     EarningsResultRecord,
+    InsiderTransaction,
     ParseFailure,
     RawObservation,
     SourceHealth,
@@ -68,6 +69,7 @@ class _TickerFetch:
     parse_failures: list[ParseFailure]
     actions: list[AnalystActionRecord]
     earnings: list[EarningsResultRecord]
+    insider: list[InsiderTransaction]
     health: list[SourceHealth]
     profile: CompanyProfile | None = None  # first source to offer one wins
 
@@ -114,7 +116,7 @@ def _write_digest(
 
 
 def _fetch_ticker(ticker: str, sources: Sequence[DataSource]) -> _TickerFetch:
-    fetch = _TickerFetch([], [], [], [], [])
+    fetch = _TickerFetch([], [], [], [], [], [])
     for source in sources:
         started = time.perf_counter()
         try:
@@ -138,6 +140,7 @@ def _fetch_ticker(ticker: str, sources: Sequence[DataSource]) -> _TickerFetch:
         fetch.parse_failures.extend(result.parse_failures)
         fetch.actions.extend(result.analyst_actions)
         fetch.earnings.extend(result.earnings_results)
+        fetch.insider.extend(result.insider_transactions)
         if fetch.profile is None and result.profile is not None:
             fetch.profile = result.profile
         fetch.health.append(
@@ -217,6 +220,7 @@ def run(
                 error=fetch.error,
                 company_profile=fetch.profile,
                 earnings=fetch.earnings,
+                insider=fetch.insider,
             )
         except Exception as exc:  # a ticker dying must never touch the others
             writer.write_ticker_result(
@@ -250,6 +254,7 @@ def run(
                         con, _t, field, run_id
                     ),
                     new_earnings=queries.new_earnings_results(con, run_id, ctx.ticker),
+                    new_insider=queries.new_insider_transactions(con, run_id, ctx.ticker),
                 )
                 # Known narrow window: this commit is separate from the data
                 # commit above, so a crash exactly between them loses this

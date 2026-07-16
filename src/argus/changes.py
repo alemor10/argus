@@ -44,6 +44,8 @@ from argus.models import (
     FieldQuarantined,
     FieldRecovered,
     FieldValue,
+    InsiderActivity,
+    InsiderTransaction,
     MacroLineCrossed,
     MacroPrint,
     MacroShift,
@@ -73,6 +75,7 @@ def detect(
     *,
     latest_accepted: Callable[[Field], FieldValue | None],
     new_earnings: Sequence[EarningsResultRecord] = (),
+    new_insider: Sequence[InsiderTransaction] = (),
 ) -> list[ChangeEvent]:
     """Diff one ticker's snapshots into typed events.
 
@@ -135,8 +138,9 @@ def detect(
 
         # Diff and action events require a baseline run. Canonical order:
         # thesis_drift, price_move, target_move, consensus_shift,
-        # analyst_action, earnings_reported, earnings_imminent,
-        # field_quarantined, field_recovered. (Macro tickers instead order:
+        # analyst_action, earnings_reported, insider_activity,
+        # earnings_imminent, field_quarantined, field_recovered. (Macro
+        # tickers instead order:
         # macro_line_crossed, macro_print, macro_shift, then the shared
         # quarantine transitions.)
         if baseline is not None:
@@ -171,6 +175,18 @@ def detect(
                         eps_actual=result.eps_actual,
                         eps_estimate=result.eps_estimate,
                         surprise_pct=_surprise_pct(result),
+                    )
+                )
+
+            for buy in sorted(new_insider, key=lambda x: (x.transaction_date, x.owner)):
+                events.append(
+                    InsiderActivity(
+                        ticker=buy.ticker,
+                        owner=buy.owner,
+                        role=buy.role,
+                        shares=buy.shares,
+                        price=buy.price,
+                        transaction_date=buy.transaction_date,
                     )
                 )
 

@@ -110,6 +110,12 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       "hardest data-eng piece" is skipped. iShares/Vanguard/N-PORT slot in
       behind the HoldingsSource protocol later. See ARCHITECTURE.md, ETF
       rebalancing.
+- [x] Insider buys (v1.15, 2026-07-16): Form 4 open-market purchases (code P)
+      by officers/directors on watchlist + consider names — realized filed
+      data, event-shaped like analyst actions (first-seen; first-run history
+      is baseline). Rides EdgarSource as a best-effort secondary channel;
+      grants/options/sales filtered at the adapter. Dormant until names held.
+      See ARCHITECTURE.md, Insider buys.
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 

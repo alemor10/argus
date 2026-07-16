@@ -323,6 +323,27 @@ class EarningsResultRecord(BaseModel):
     fetched_at: AwareDatetime
 
 
+class InsiderTransaction(BaseModel):
+    """One insider OPEN-MARKET PURCHASE (Form 4, transaction code P) — an
+    officer/director/10%-owner buying with their own money, the high-signal
+    case. Grants (A), option exercises (M), and sales (S) are filtered at the
+    adapter. Event-shaped like analyst_actions: stored with a natural key +
+    first_seen_run_id so 'new since last run' is set membership."""
+
+    model_config = ConfigDict(frozen=True)
+
+    ticker: str
+    accession: str  # the SEC filing id (globally unique)
+    filing_date: date
+    transaction_date: date
+    owner: str
+    role: str  # "director" / "officer: CFO" / "10% owner" (combined)
+    shares: float = PydanticField(allow_inf_nan=False)
+    price: float | None = PydanticField(default=None, allow_inf_nan=False)
+    source: Source
+    fetched_at: AwareDatetime
+
+
 class CompanyProfile(BaseModel):
     """Descriptive identity — what the business IS. Provenance-stamped like
     everything else, but not gate-material: there are no plausibility bounds
@@ -409,6 +430,20 @@ class EarningsReported(_Event):
     eps_actual: float
     eps_estimate: float | None = None
     surprise_pct: float | None = None
+
+
+class InsiderActivity(_Event):
+    """A NEW insider open-market purchase landed since the last run — an
+    officer/director bought shares with their own money. Realized filed data
+    (Form 4), never a forecast; a buy is a buy. Cluster context (several
+    insiders buying) is surfaced by the renderer, not this event."""
+
+    kind: Literal["insider_activity"] = "insider_activity"
+    owner: str
+    role: str
+    shares: float
+    price: float | None = None
+    transaction_date: date
 
 
 class EarningsImminent(_Event):
@@ -509,6 +544,7 @@ ChangeEvent = Annotated[
     | ConsensusShift
     | AnalystAction
     | EarningsReported
+    | InsiderActivity
     | EarningsImminent
     | FieldQuarantined
     | FieldRecovered,

@@ -540,6 +540,73 @@ class TestFredParse:
         assert len(result.parse_failures) == 1  # the whole payload is evidence
 
 
+class TestForm4Parse:
+    from datetime import date as _date
+
+    FA = FETCHED_AT
+    GRANT = (FIXTURES / "edgar" / "form4-CF-grant-2026-05-28.xml").read_text()
+
+    _P_BUY = (
+        "<ownershipDocument><reportingOwner><reportingOwnerId>"
+        "<rptOwnerName>Jane Buyer</rptOwnerName></reportingOwnerId>"
+        "<reportingOwnerRelationship><isDirector>1</isDirector><isOfficer>0</isOfficer>"
+        "</reportingOwnerRelationship></reportingOwner><nonDerivativeTable>"
+        "<nonDerivativeTransaction><transactionDate><value>2026-07-10</value></transactionDate>"
+        "<transactionCoding><transactionCode>{code}</transactionCode></transactionCoding>"
+        "<transactionAmounts><transactionShares><value>5000</value></transactionShares>"
+        "<transactionPricePerShare><value>42.50</value></transactionPricePerShare>"
+        "<transactionAcquiredDisposedCode><value>A</value></transactionAcquiredDisposedCode>"
+        "</transactionAmounts></nonDerivativeTransaction></nonDerivativeTable></ownershipDocument>"
+    )
+
+    def _parse(self, xml, ticker="NVDA"):
+        from argus.sources.edgar import parse_form4
+
+        return parse_form4(xml, ticker, "0000-00-1", date(2026, 7, 10), Source.EDGAR, self.FA)
+
+    def test_real_grant_yields_no_buys(self):
+        # CF's recorded Form 4 was a code-A grant by the CFO — not a buy.
+        assert self._parse(self.GRANT, "CF") == []
+
+    def test_open_market_purchase_is_captured(self):
+        [buy] = self._parse(self._P_BUY.format(code="P"))
+        assert buy.owner == "Jane Buyer"
+        assert buy.role == "director"
+        assert buy.shares == 5000.0
+        assert buy.price == pytest.approx(42.5)
+        assert buy.transaction_date == date(2026, 7, 10)
+        assert buy.source is Source.EDGAR
+
+    @pytest.mark.parametrize("code", ["S", "A", "M", "G"])
+    def test_non_purchase_codes_are_filtered(self, code):
+        assert self._parse(self._P_BUY.format(code=code)) == []
+
+    def test_malformed_xml_never_raises(self):
+        assert self._parse("<ownershipDocument><broken") == []
+
+    def test_recent_form4s_windows_and_caps(self):
+        from datetime import date as d
+        from datetime import timedelta
+
+        from argus.sources.edgar import _FORM4_CAP, _recent_form4s
+
+        today = datetime.now(UTC).date()
+        recent = {"form": [], "accessionNumber": [], "filingDate": [], "primaryDocument": []}
+        # one old Form 4 (excluded), then many recent (capped)
+        recent["form"].append("4"); recent["accessionNumber"].append("old")
+        recent["filingDate"].append((today - timedelta(days=400)).isoformat())
+        recent["primaryDocument"].append("x/old.xml")
+        for i in range(_FORM4_CAP + 5):
+            recent["form"].append("4"); recent["accessionNumber"].append(f"a{i}")
+            recent["filingDate"].append(today.isoformat())
+            recent["primaryDocument"].append(f"xslF345X06/f{i}.xml")
+        recent["form"].append("10-K"); recent["accessionNumber"].append("k")
+        recent["filingDate"].append(today.isoformat()); recent["primaryDocument"].append("k.htm")
+        got = _recent_form4s({"filings": {"recent": recent}})
+        assert len(got) == _FORM4_CAP  # capped
+        assert all(acc != "old" and acc != "k" for acc, _d, _doc in got)  # windowed + form-filtered
+
+
 # --- Live smoke (excluded by default via pytest addopts) ---------------------
 
 

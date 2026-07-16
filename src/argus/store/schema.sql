@@ -118,6 +118,26 @@ CREATE TABLE earnings_results (
     PRIMARY KEY (ticker, quarter_end)
 ) WITHOUT ROWID;
 
+-- Insider open-market purchases (v1.15) — Form 4 transaction-code-P buys by
+-- officers/directors/10%-owners. Event-shaped like analyst_actions:
+-- INSERT OR IGNORE on the natural key, first_seen_run_id makes "new since
+-- last run" a set-membership fact. Filtered to buys at the adapter; grants,
+-- option exercises, and sales never land here.
+CREATE TABLE insider_transactions (
+    ticker            TEXT NOT NULL,
+    accession         TEXT NOT NULL,   -- SEC filing id
+    transaction_date  TEXT NOT NULL,
+    shares            REAL NOT NULL,
+    filing_date       TEXT NOT NULL,
+    owner             TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    price             REAL,
+    source            TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL,
+    first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, accession, transaction_date, shares)
+) WITHOUT ROWID;
+
 -- Descriptive business identity per ticker, append-only (latest fetched_at
 -- wins on read). Not gate-material — no plausibility bounds exist for prose —
 -- but provenance-stamped like everything else. Reports render it; the diff

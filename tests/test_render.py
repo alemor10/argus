@@ -190,6 +190,18 @@ class TestChangesSection:
         out = render(_report([reporter]))
         assert "- Earnings reported (quarter ended 2026-06-30): EPS 1.05 vs 0.93 est (+12.9%)" in out
 
+    def test_insider_buy_line(self):
+        from argus.models import InsiderActivity
+
+        reporter = _quiet_ticker(events=(
+            InsiderActivity(
+                ticker="NVDA", owner="Jane Buyer", role="officer: CFO",
+                shares=5000.0, price=42.5, transaction_date=date(2026, 6, 30),
+            ),
+        ))
+        out = render(_report([reporter]))
+        assert "- Insider buy: Jane Buyer (officer: CFO) bought 5,000 sh @ 42.50 (~212.5K) on 2026-06-30" in out
+
     def test_earnings_reported_without_estimate_says_so(self):
         reporter = _quiet_ticker(
             events=(

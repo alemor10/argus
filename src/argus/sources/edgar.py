@@ -10,7 +10,8 @@ best-effort. A missing tag means that field is absent — EDGAR is a
 cross-check, and absence is disclosed elsewhere in the pipeline.
 """
 
-from datetime import UTC, date, datetime
+import xml.etree.ElementTree as ET
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -18,11 +19,19 @@ from pydantic import AwareDatetime
 
 from argus import __version__
 from argus.fields import Field, Source
-from argus.models import RawObservation
+from argus.models import InsiderTransaction, RawObservation
 from argus.sources.base import FetchResult, SourceError
 
 _COMPANY_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
 _COMPANYFACTS_URL = "https://data.sec.gov/api/xbrl/companyfacts/CIK{cik}.json"
+_SUBMISSIONS_URL = "https://data.sec.gov/submissions/CIK{cik}.json"
+_FORM4_URL = "https://www.sec.gov/Archives/edgar/data/{cik}/{acc}/{doc}"
+
+# Only recent Form 4s are fetched: a buy is caught within the window and
+# first-seen'd; older ones were caught before. Bounded so a heavily-traded
+# name never floods a run with XML fetches.
+_FORM4_WINDOW = timedelta(days=45)
+_FORM4_CAP = 20
 
 _ANNUAL_FORMS = frozenset({"10-K", "20-F"})
 # A fiscal year is ~365 days (52/53-week calendars drift a little); the window
@@ -67,7 +76,39 @@ class EdgarSource:
                 payload = self._fetch_raw(ticker)
             except Exception as exc:
                 raise SourceError(f"edgar: fetch failed for {ticker}: {exc}") from exc
-        return self.parse(payload, ticker, fetched_at)
+        result = self.parse(payload, ticker, fetched_at)
+        # Insider buys ride the same source (same CIK map) as a SECONDARY
+        # channel — best-effort: a Form 4 outage must never break the
+        # fundamentals cross-check, so it degrades to no transactions.
+        try:
+            insider = self._fetch_form4s(ticker, fetched_at)
+        except Exception:
+            insider = ()
+        return result.model_copy(update={"insider_transactions": insider})
+
+    def _fetch_form4s(
+        self, ticker: str, fetched_at: AwareDatetime
+    ) -> tuple[InsiderTransaction, ...]:
+        """Recent Form 4 open-market purchases for the ticker. One submissions
+        request lists filings; only Form 4s within the window (capped) have
+        their ownership XML fetched and parsed. The store dedups by
+        first_seen, so re-fetching the window each run is harmless."""
+        cik = self._cik_map().get(_normalize(ticker))
+        if cik is None:
+            return ()
+        submissions = self._get_json(_SUBMISSIONS_URL.format(cik=cik))
+        transactions: list[InsiderTransaction] = []
+        for accession, filing_date, doc in _recent_form4s(submissions):
+            filename = doc.rsplit("/", 1)[-1]  # strip the xslF345X0X rendering prefix
+            url = _FORM4_URL.format(cik=int(cik), acc=accession.replace("-", ""), doc=filename)
+            try:
+                xml_text = self._get_text(url)
+            except Exception:
+                continue  # one bad filing must not sink the rest
+            transactions.extend(
+                parse_form4(xml_text, ticker, accession, filing_date, self.source_id, fetched_at)
+            )
+        return tuple(transactions)
 
     def _fetch_raw(self, ticker: str) -> Any:
         """Network only: companyfacts JSON for the resolved CIK.
@@ -139,6 +180,12 @@ class EdgarSource:
         return self._cik_by_ticker
 
     def _get_json(self, url: str) -> Any:
+        return self._get(url).json()
+
+    def _get_text(self, url: str) -> str:
+        return self._get(url).text
+
+    def _get(self, url: str) -> httpx.Response:
         response = httpx.get(
             url,
             headers={"User-Agent": f"argus/{__version__} {self.contact_email}"},
@@ -146,7 +193,112 @@ class EdgarSource:
             follow_redirects=True,
         )
         response.raise_for_status()
-        return response.json()
+        return response
+
+
+def _recent_form4s(submissions: Any) -> list[tuple[str, date, str]]:
+    """(accession, filing_date, primary_document) for Form 4s filed within the
+    window, newest first, capped. The submissions JSON stores filings as
+    parallel arrays under filings.recent."""
+    recent = submissions.get("filings", {}).get("recent", {}) if isinstance(submissions, dict) else {}
+    forms = recent.get("form", [])
+    accessions = recent.get("accessionNumber", [])
+    dates = recent.get("filingDate", [])
+    docs = recent.get("primaryDocument", [])
+    if not (len(forms) == len(accessions) == len(dates) == len(docs)):
+        return []
+    cutoff = datetime.now(UTC).date() - _FORM4_WINDOW
+    out: list[tuple[str, date, str]] = []
+    for form, acc, filed, doc in zip(forms, accessions, dates, docs):
+        if form != "4" or not isinstance(acc, str) or not isinstance(doc, str):
+            continue
+        filing_date = _iso_date(filed)
+        if filing_date is None or filing_date < cutoff:
+            continue
+        out.append((acc, filing_date, doc))
+        if len(out) >= _FORM4_CAP:
+            break
+    return out
+
+
+def parse_form4(
+    xml_text: str,
+    ticker: str,
+    accession: str,
+    filing_date: date,
+    source: Source,
+    fetched_at: AwareDatetime,
+) -> list[InsiderTransaction]:
+    """One Form 4 ownership XML → its OPEN-MARKET PURCHASES (transaction code
+    P only — an insider buying with their own money; grants A, option
+    exercises M, and sales S are filtered out here). Malformed XML or a
+    missing field yields nothing, never an exception — a bad filing is not a
+    fatal error."""
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError:
+        return []
+    owner_el = root.find(".//reportingOwner")
+    if owner_el is None:
+        return []
+    owner = _xml_text(owner_el, ".//rptOwnerName") or "an insider"
+    role = _owner_role(owner_el.find("reportingOwnerRelationship"))
+    out: list[InsiderTransaction] = []
+    for txn in root.findall(".//nonDerivativeTransaction"):
+        if _xml_text(txn, ".//transactionCode") != "P":
+            continue  # open-market purchase is the signal; the rest is noise
+        shares = _xml_num(txn, ".//transactionShares/value")
+        transaction_date = _iso_date(_xml_text(txn, ".//transactionDate/value"))
+        if shares is None or transaction_date is None:
+            continue
+        out.append(
+            InsiderTransaction(
+                ticker=ticker,
+                accession=accession,
+                filing_date=filing_date,
+                transaction_date=transaction_date,
+                owner=owner,
+                role=role,
+                shares=shares,
+                price=_xml_num(txn, ".//transactionPricePerShare/value"),
+                source=source,
+                fetched_at=fetched_at,
+            )
+        )
+    return out
+
+
+def _owner_role(rel: Any) -> str:
+    """Combine the Form 4 relationship flags into one human phrase."""
+    if rel is None:
+        return "insider"
+    parts: list[str] = []
+    if _xml_text(rel, "isDirector") in ("1", "true"):
+        parts.append("director")
+    if _xml_text(rel, "isOfficer") in ("1", "true"):
+        title = _xml_text(rel, "officerTitle")
+        parts.append(f"officer: {title}" if title else "officer")
+    if _xml_text(rel, "isTenPercentOwner") in ("1", "true"):
+        parts.append("10% owner")
+    return ", ".join(parts) or "insider"
+
+
+def _xml_text(el: Any, path: str) -> str | None:
+    if el is None:
+        return None
+    child = el.find(path)
+    return child.text.strip() if child is not None and child.text else None
+
+
+def _xml_num(el: Any, path: str) -> float | None:
+    raw = _xml_text(el, path)
+    if raw is None:
+        return None
+    try:
+        value = float(raw)
+    except ValueError:
+        return None
+    return value if value == value and abs(value) != float("inf") else None
 
 
 def _normalize(ticker: str) -> str:

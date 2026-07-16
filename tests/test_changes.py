@@ -16,6 +16,8 @@ from argus.models import (
     FieldQuarantined,
     FieldRecovered,
     FieldValue,
+    InsiderActivity,
+    InsiderTransaction,
     MacroLineCrossed,
     MacroPrint,
     MacroShift,
@@ -65,10 +67,11 @@ def _never_called(field):
     raise AssertionError(f"latest_accepted must not be consulted (asked for {field})")
 
 
-def _detect(baseline, current, *, ctx=None, new_actions=(), new_earnings=(), today=TODAY,
-            latest_accepted=_no_fallback):
+def _detect(baseline, current, *, ctx=None, new_actions=(), new_earnings=(), new_insider=(),
+            today=TODAY, latest_accepted=_no_fallback):
     return detect(baseline, current, ctx or _ctx(), new_actions, today,
-                  latest_accepted=latest_accepted, new_earnings=new_earnings)
+                  latest_accepted=latest_accepted, new_earnings=new_earnings,
+                  new_insider=new_insider)
 
 
 class TestPriceMove:
@@ -298,6 +301,36 @@ class TestEarningsReported:
 
     def test_no_new_results_no_events(self):
         assert _detect(_snap(1), _snap(2), new_earnings=[]) == []
+
+
+class TestInsiderActivity:
+    def _buy(self, owner="Jane Buyer", when=date(2026, 6, 30)):
+        return InsiderTransaction(
+            ticker="NVDA", accession=f"acc-{owner}", filing_date=date(2026, 7, 1),
+            transaction_date=when, owner=owner, role="director", shares=5000.0,
+            price=42.5, source=Source.YAHOO, fetched_at=NOW,
+        )
+
+    def test_new_buy_becomes_an_event(self):
+        events = _detect(_snap(1), _snap(2), new_insider=[self._buy()])
+        assert events == [
+            InsiderActivity(
+                ticker="NVDA", owner="Jane Buyer", role="director",
+                shares=5000.0, price=42.5, transaction_date=date(2026, 6, 30),
+            )
+        ]
+
+    def test_sorted_by_date_then_owner(self):
+        a = self._buy(owner="Zoe", when=date(2026, 6, 28))
+        b = self._buy(owner="Amy", when=date(2026, 6, 30))
+        c = self._buy(owner="Bob", when=date(2026, 6, 30))
+        events = _detect(_snap(1), _snap(2), new_insider=[b, a, c])
+        assert [(e.transaction_date, e.owner) for e in events] == [
+            (date(2026, 6, 28), "Zoe"), (date(2026, 6, 30), "Amy"), (date(2026, 6, 30), "Bob"),
+        ]
+
+    def test_first_run_history_is_baseline_not_news(self):
+        assert _detect(None, _snap(1), new_insider=[self._buy()], latest_accepted=_never_called) == []
 
 
 class TestEarningsImminent:

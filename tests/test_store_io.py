@@ -74,14 +74,14 @@ def _begin(con, *, started_at=T1, kind="watch"):
     return writer.begin_run(con, kind=kind, started_at=started_at, app_version="test")
 
 
-def _write(con, run_id, *, ticker="NVDA", gated=(), actions=(), earnings=(), health=(),
-           status="ok", error=None, thesis=None, thresholds=Thresholds(), macro=None,
+def _write(con, run_id, *, ticker="NVDA", gated=(), actions=(), earnings=(), insider=(),
+           health=(), status="ok", error=None, thesis=None, thresholds=Thresholds(), macro=None,
            tier="watch"):
     writer.write_ticker_result(
         con, run_id=run_id,
         context=TickerContext(ticker=ticker, thesis=thesis, thresholds=thresholds, macro=macro,
                               tier=tier),
-        gated=gated, actions=actions, earnings=earnings, source_health=health,
+        gated=gated, actions=actions, earnings=earnings, insider=insider, source_health=health,
         status=status, error=error,
     )
 
@@ -548,6 +548,31 @@ def test_etf_rebalance_is_the_diff_of_snapshots(con):
     assert rebalance.etf == "SPY"
     assert rebalance.added == ("D",)
     assert rebalance.dropped == ("C",)
+
+
+def test_insider_buys_dedup_and_new_since_run(con):
+    from datetime import date
+
+    from argus.models import InsiderTransaction
+
+    def buy(acc, **kw):
+        base = dict(ticker="NVDA", accession=acc, filing_date=date(2026, 7, 10),
+                    transaction_date=date(2026, 7, 9), owner="Jane Buyer", role="director",
+                    shares=5000.0, price=42.5, source=Source.YAHOO, fetched_at=T0)
+        base.update(kw)
+        return InsiderTransaction(**base)
+
+    r1 = _begin(con, started_at=T0)
+    _write(con, r1, insider=[buy("A-1")])
+    writer.finish_run(con, run_id=r1, status="complete", finished_at=T0)
+
+    r2 = _begin(con, started_at=T1)
+    refetch = buy("A-1", fetched_at=T1)  # re-served: dedup keeps r1 provenance
+    fresh = buy("A-2", fetched_at=T1, owner="John Director", transaction_date=date(2026, 7, 12))
+    _write(con, r2, insider=[refetch, fresh])
+
+    assert queries.new_insider_transactions(con, r1, "NVDA") == [buy("A-1")]
+    assert [x.accession for x in queries.new_insider_transactions(con, r2, "NVDA")] == ["A-2"]
 
 
 # --- events + run_report ------------------------------------------------------

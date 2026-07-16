@@ -21,6 +21,7 @@ from argus.models import (
     FieldQuarantined,
     FieldRecovered,
     FieldValue,
+    InsiderActivity,
     MacroLineCrossed,
     MacroPrint,
     MacroShift,
@@ -954,6 +955,15 @@ def _event_line(event: ChangeEvent) -> str:
             if surprise_pct is not None:
                 line += f" ({surprise_pct:+.1f}%)"
             return line
+        case InsiderActivity(
+            owner=owner, role=role, shares=shares, price=price, transaction_date=when
+        ):
+            amount = f"{shares:,.0f} sh" + (f" @ {price:.2f}" if price else "")
+            value = f" (~{_humanize_cap(shares * price)})" if price else ""
+            return (
+                f"Insider buy: {owner} ({role}) bought {amount}{value} "
+                f"on {when.isoformat()}"
+            )
         case EarningsImminent(earnings_date=earnings_date, days_until=days_until):
             return f"Earnings imminent: {earnings_date.isoformat()} ({_days_phrase(days_until)})"
         case FieldQuarantined(field=field, reasons=reasons):

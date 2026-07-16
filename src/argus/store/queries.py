@@ -19,6 +19,7 @@ from argus.models import (
     EtfHolding,
     EtfRebalance,
     FieldValue,
+    InsiderTransaction,
     MacroSpec,
     MarketWire,
     QuarantinedObservation,
@@ -152,6 +153,22 @@ def new_earnings_results(
         (ticker, run_id),
     ).fetchall()
     return [EarningsResultRecord.model_validate(dict(row)) for row in rows]
+
+
+def new_insider_transactions(
+    con: sqlite3.Connection, run_id: int, ticker: str
+) -> list[InsiderTransaction]:
+    """Insider buys first seen in this run — exactly changes.detect's
+    new_insider input (the analyst_actions set-membership precedent)."""
+    rows = con.execute(
+        """SELECT ticker, accession, transaction_date, shares, filing_date,
+                  owner, role, price, source, fetched_at
+           FROM insider_transactions
+           WHERE ticker = ? AND first_seen_run_id = ?
+           ORDER BY transaction_date, owner""",
+        (ticker, run_id),
+    ).fetchall()
+    return [InsiderTransaction.model_validate(dict(row)) for row in rows]
 
 
 def quarantine_report(con: sqlite3.Connection, run_id: int) -> list[sqlite3.Row]:

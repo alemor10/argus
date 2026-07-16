@@ -35,6 +35,7 @@ from argus.gates import DEFAULT_PROFILE
 from argus.models import (
     AnalystActionRecord,
     EarningsResultRecord,
+    InsiderTransaction,
     MacroSpec,
     RawObservation,
     Thresholds,
@@ -108,8 +109,10 @@ class _StubSource:
         )
         actions = tuple(payload.get("actions", ()))
         earnings = tuple(payload.get("earnings", ()))
+        insider = tuple(payload.get("insider", ()))
         return FetchResult(
-            observations=observations, analyst_actions=actions, earnings_results=earnings
+            observations=observations, analyst_actions=actions, earnings_results=earnings,
+            insider_transactions=insider,
         )
 
 
@@ -238,6 +241,21 @@ def _sources_run2():
                     fetched_at=RUN2_AT,
                 )
             ],
+            "insider": [
+                # NEW this run: an open-market purchase → InsiderActivity.
+                InsiderTransaction(
+                    ticker="NVDA",
+                    accession="0000-26-777",
+                    filing_date=date(2026, 7, 12),
+                    transaction_date=date(2026, 7, 11),
+                    owner="Jane Director",
+                    role="director",
+                    shares=5000.0,
+                    price=181.0,
+                    source=Source.YAHOO,
+                    fetched_at=RUN2_AT,
+                )
+            ],
         },
         # 15.0 → 25.4: MacroShift (+10.40 ≥ 3.0) AND the "value >= 25" line
         # newly crossed — but NO PriceMove, despite +69%.
@@ -337,6 +355,7 @@ def test_golden_run_events_in_store(con):
     # NVDA's quarter was first seen on run 1 (baseline): the run-2 re-serve
     # must not fire — a stale quarter re-reported weekly would be noise.
     assert "earnings_reported" not in by_ticker["NVDA"]
+    assert "insider_activity" in by_ticker["NVDA"]  # the open-market buy
     # The macro series alerts by ITS rules (line + shift), never the equity
     # machinery — +69% on VIX is not a PriceMove.
     assert by_ticker["^VIX"] == ["macro_line_crossed", "macro_shift"]

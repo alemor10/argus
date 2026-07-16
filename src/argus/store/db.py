@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -121,6 +121,23 @@ CREATE TABLE IF NOT EXISTS etf_holdings (
     etf      TEXT    NOT NULL,
     holdings TEXT    NOT NULL,
     PRIMARY KEY (run_id, etf)
+) WITHOUT ROWID;
+""",
+    # v1.15: insider open-market purchases (Form 4 code P), event-shaped.
+    10: """
+CREATE TABLE IF NOT EXISTS insider_transactions (
+    ticker            TEXT NOT NULL,
+    accession         TEXT NOT NULL,
+    transaction_date  TEXT NOT NULL,
+    shares            REAL NOT NULL,
+    filing_date       TEXT NOT NULL,
+    owner             TEXT NOT NULL,
+    role              TEXT NOT NULL,
+    price             REAL,
+    source            TEXT NOT NULL,
+    fetched_at        TEXT NOT NULL,
+    first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
+    PRIMARY KEY (ticker, accession, transaction_date, shares)
 ) WITHOUT ROWID;
 """,
 }

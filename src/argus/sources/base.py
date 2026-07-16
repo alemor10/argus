@@ -18,6 +18,7 @@ from argus.models import (
     AnalystActionRecord,
     CompanyProfile,
     EarningsResultRecord,
+    InsiderTransaction,
     ParseFailure,
     RawObservation,
 )
@@ -36,6 +37,7 @@ class FetchResult(BaseModel):
     parse_failures: tuple[ParseFailure, ...] = ()  # sent-but-unreadable → UNPARSEABLE quarantine
     analyst_actions: tuple[AnalystActionRecord, ...] = ()
     earnings_results: tuple[EarningsResultRecord, ...] = ()  # reported quarters (actuals only)
+    insider_transactions: tuple[InsiderTransaction, ...] = ()  # Form 4 open-market buys
     profile: CompanyProfile | None = None  # descriptive identity, when the source carries one
 
 

@@ -22,6 +22,7 @@ _Datacenter capex supercycle; CUDA moat._
 - Price 170.00 → 181.25 (+6.6%, threshold 5.0%) vs 2026-07-06
 - Consensus rating buy → hold (down)
 - Analyst action (2026-07-12): Morgan Stanley down — Overweight → Equal-Weight
+- Insider buy: Jane Director (director) bought 5,000 sh @ 181.00 (~905.0K) on 2026-07-11
 - Earnings imminent: 2026-07-17 (in 4 days)
 
 ### ^VIX
