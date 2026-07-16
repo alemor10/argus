@@ -629,8 +629,8 @@ def _earnings_wire_section(wire: "MarketWire") -> list[str]:
             line = f"- {b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
             if b.eps_estimate is not None:
                 line += f" vs {b.eps_estimate:.2f} est"
-                if b.eps_estimate != 0:
-                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                surprise = _eps_surprise_pct(b.eps_actual, b.eps_estimate)
+                if surprise is not None:
                     line += f" ({surprise:+.1f}%)"
             lines.append(line)
         lines.append("")
@@ -764,8 +764,8 @@ def _bellwether_section(report: RunReport) -> list[str]:
             line = f"- {b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
             if b.eps_estimate is not None:
                 line += f" vs {b.eps_estimate:.2f} est"
-                if b.eps_estimate != 0:
-                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                surprise = _eps_surprise_pct(b.eps_actual, b.eps_estimate)
+                if surprise is not None:
                     line += f" ({surprise:+.1f}%)"
             lines.append(line)
         lines.append("")
@@ -1055,6 +1055,16 @@ def _days_phrase(days: int) -> str:
     if days == 0:
         return "today"
     return f"in {days} day" + ("" if days == 1 else "s")
+
+
+def _eps_surprise_pct(actual: float, estimate: float | None) -> float | None:
+    """(actual − estimate) / |estimate| · 100 — signed, so a beat is positive
+    whatever the estimate's sign. None when there is nothing to be surprised
+    against (no estimate, or a zero estimate makes the ratio undefined). One
+    home for the earnings-wire + bellwether formula, in both artifacts."""
+    if estimate is None or estimate == 0:
+        return None
+    return (actual - estimate) / abs(estimate) * 100
 
 
 def _humanize_cap(value: float) -> str:

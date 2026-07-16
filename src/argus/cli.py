@@ -20,7 +20,6 @@ import typer
 import argus
 from argus import engine
 from argus.config import (
-    ConsiderConfig,
     Paths,
     build_consider_contexts,
     build_contexts,

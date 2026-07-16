@@ -35,7 +35,7 @@ import io
 import math
 import textwrap
 from collections.abc import Mapping, Sequence
-from datetime import UTC, date, datetime
+from datetime import date, datetime
 
 import matplotlib
 
@@ -54,9 +54,16 @@ from argus.digest import (
     _considering_line as _digest_considering_line,
     _feature_fact_lines as _digest_feature_fact_lines,
     _event_line as _digest_event_line,
-    _macro_line as _digest_macro_line,
     _radar_crossings as _digest_radar_crossings,
     _spread_lines as _digest_spread_lines,
+    # ...and the shared formatters/formula — ONE source each, for the same
+    # reason (a divergence would be the two artifacts disagreeing on a number).
+    # `_fmt_value` stays local: the PDF panels format via _HUMANIZED_FIELDS /
+    # _PERCENT_FIELDS, which the markdown tri-state does not.
+    _eps_surprise_pct,
+    _humanize_cap,
+    _pct,
+    _ts,
 )
 from argus.fields import SPECS, Field, Source
 from argus.models import (
@@ -541,12 +548,6 @@ def _scorecard_empty_line(card: Scorecard | None) -> str:
     return _SCORECARD_EMPTY
 
 
-def _pct(fraction: float) -> str:
-    """Signed percent for scorecard values (+3.4% / -1.2%) — the digest's
-    Scorecard convention, so claim and verified value read identically."""
-    return f"{fraction * 100:+.1f}%"
-
-
 def _health_lines(report: RunReport) -> list[tuple[str, str]]:
     """Per-source health rollups — the same tallies, first-error, skipped
     cross-checks, and not-configured statements as the markdown digest's Data
@@ -619,7 +620,6 @@ def _health_lines(report: RunReport) -> list[tuple[str, str]]:
 # Page-space rails: a matplotlib figure silently draws past the page edge, so
 # every flowing block is capped with a disclosed overflow line (the markdown
 # digest and the store always carry the full record).
-_MAX_MACRO_LINES = 20
 _MAX_CHANGES_LINES = 30
 _MAX_BELLWETHER_LINES = 14
 _MAX_QUARANTINE_LINES = 12
@@ -962,33 +962,6 @@ def _market_wire_page(report: RunReport) -> Figure:
     return fig
 
 
-def _movers_pdf_lines(wire) -> list[tuple[str, str]]:
-    if not wire.gainers and not wire.losers:
-        return [("No large-cap gainers or losers last session — a flat tape is information.",
-                 _SECONDARY)]
-    lines: list[tuple[str, str]] = []
-    for title, movers in (("Gainers:", wire.gainers), ("Losers:", wire.losers)):
-        if not movers:
-            continue
-        lines.append((title, _SECONDARY))
-        for m in movers:
-            name = f" — {m.company}" if m.company else ""
-            lines.append(
-                (_clip(f"   {m.symbol} {m.change_pct:+.1f}% → {m.close:.2f}{name} ({m.sector})", 114),
-                 _INK)
-            )
-    return lines
-
-
-def _sectors_pdf_lines(wire) -> list[tuple[str, str]]:
-    if not wire.sectors:
-        return [("No sector data in the scan this issue.", _SECONDARY)]
-    return [
-        (f"{p.sector}: {p.median_change_pct:+.1f}% median ({p.n} names)", _INK)
-        for p in wire.sectors
-    ]
-
-
 def _earnings_wire_pdf_lines(wire) -> list[tuple[str, str]]:
     if not wire.earnings_reported and not wire.earnings_upcoming:
         return [("No large-cap earnings reported or scheduled in the window.", _SECONDARY)]
@@ -1000,8 +973,8 @@ def _earnings_wire_pdf_lines(wire) -> list[tuple[str, str]]:
             tone = _INK
             if b.eps_estimate is not None:
                 text += f" vs {b.eps_estimate:.2f} est"
-                if b.eps_estimate != 0:
-                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                surprise = _eps_surprise_pct(b.eps_actual, b.eps_estimate)
+                if surprise is not None:
                     text += f" ({surprise:+.1f}%)"
                     tone = _UP if surprise > 0 else _CRITICAL if surprise < 0 else _INK
             lines.append((text, tone))
@@ -1096,23 +1069,6 @@ def _sorted_watch_then_macro(report: RunReport) -> list[TickerReport]:
     return watch + macro
 
 
-def _macro_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
-    """The digest's Macro section, via the digest's own line renderer —
-    markdown chrome stripped, warning lines toned critical."""
-    macro = sorted(
-        (t for t in report.tickers if t.context.macro is not None),
-        key=lambda t: (t.context.macro.label, t.context.ticker),
-    )
-    lines: list[tuple[str, str]] = []
-    for ticker in macro:
-        text = _digest_macro_line(ticker).removeprefix("- ")
-        lines.append((_clip(text, 118), _CRITICAL if "⚠" in text else _INK))
-    for spread in _digest_spread_lines(macro):
-        text = spread.removeprefix("- ").replace("_(", "(").replace(")_", ")")
-        lines.append((_clip(text, 118), _SECONDARY))
-    return lines
-
-
 def _changes_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
     """Every change event, rendered with the digest's own event lines —
     the counts-only summary this replaced buried the actual news."""
@@ -1159,8 +1115,8 @@ def _bellwether_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
             text = f"{b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
             if b.eps_estimate is not None:
                 text += f" vs {b.eps_estimate:.2f} est"
-                if b.eps_estimate != 0:
-                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                surprise = _eps_surprise_pct(b.eps_actual, b.eps_estimate)
+                if surprise is not None:
                     text += f" ({surprise:+.1f}%)"
             lines.append(("   " + text, _INK))
     if upcoming:
@@ -1803,28 +1759,6 @@ def _fmt_value(field: Field, value: object) -> str:
     if field in _PERCENT_FIELDS:
         return f"{number * 100:.1f}%"  # stored as a fraction; read as a percent
     return f"{number:.2f}"
-
-
-def _humanize_cap(value: float) -> str:
-    """1.23T / 456.7B / 89.0M — three-ish significant figures, never raw."""
-
-    def _render(scaled: float, suffix: str) -> str:
-        return f"{scaled:.2f}{suffix}" if abs(scaled) < 10 else f"{scaled:.1f}{suffix}"
-
-    magnitude = abs(value)
-    units = ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"))
-    for i, (divisor, suffix) in enumerate(units):
-        if magnitude >= divisor:
-            rendered = _render(value / divisor, suffix)
-            if rendered.lstrip("-").startswith("1000.") and i > 0:
-                bigger_divisor, bigger_suffix = units[i - 1]
-                rendered = _render(value / bigger_divisor, bigger_suffix)
-            return rendered
-    return f"{value:.2f}"
-
-
-def _ts(dt: datetime) -> str:
-    return dt.astimezone(UTC).strftime("%Y-%m-%d %H:%MZ")
 
 
 def _clip(text: str, limit: int) -> str:

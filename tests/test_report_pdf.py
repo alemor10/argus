@@ -979,34 +979,6 @@ class TestPdfParity:
 
         assert _changes_pdf_lines(report)[0][0] == "No changes since last run."
 
-    def test_macro_lines_mirror_the_digest_with_spread(self):
-        from argus.models import MacroSpec
-        from argus.report_pdf import _CRITICAL, _macro_pdf_lines
-
-        tnx = _ticker_report(
-            "^TNX", {Field.PRICE: _fv(Field.PRICE, 4.55)},
-            context=TickerContext(ticker="^TNX", macro=MacroSpec(label="US 10Y yield", unit="%")),
-        )
-        irx = _ticker_report(
-            "^IRX", {Field.PRICE: _fv(Field.PRICE, 3.69)},
-            context=TickerContext(ticker="^IRX", macro=MacroSpec(label="US 3M yield", unit="%")),
-        )
-        vix = _ticker_report(
-            "^VIX", {Field.PRICE: _fv(Field.PRICE, 45.4)},
-            context=TickerContext(
-                ticker="^VIX", macro=MacroSpec(label="VIX", sanity=(0.0, 40.0))
-            ),
-        )
-        report = RunReport(
-            run_id=9, kind="watch", as_of=NOW, status="complete", tickers=(tnx, irx, vix),
-        )
-        lines = _macro_pdf_lines(report)
-        texts = [text for text, _tone in lines]
-        assert texts[0].startswith("US 10Y yield: 4.55%")
-        assert texts[1].startswith("US 3M yield: 3.69%")
-        assert "⚠ implausible" in texts[2] and lines[2][1] == _CRITICAL
-        assert texts[3] == "10Y − 3M spread: +0.86pp (derived at render from the two yields)"
-
     def test_bellwether_lines_split_and_compute_surprise(self):
         from argus.models import BellwetherEarning
         from argus.report_pdf import _bellwether_pdf_lines
@@ -1102,18 +1074,11 @@ class TestMarketWirePage:
         assert build_pdf(report, history) == pdf  # tiles + sparklines stay deterministic
 
     def test_wire_lines_mirror_the_digest_numbers(self):
-        from argus.report_pdf import (
-            _earnings_wire_pdf_lines,
-            _extremes_pdf_lines,
-            _movers_pdf_lines,
-            _sectors_pdf_lines,
-        )
+        # Movers and sector pulse render as charts (asserted via build_pdf
+        # determinism above); the earnings wire and extremes stay list-form.
+        from argus.report_pdf import _earnings_wire_pdf_lines, _extremes_pdf_lines
 
         wire = self._wire()
-        texts = [t for t, _tone in _movers_pdf_lines(wire)]
-        assert "   ABT +11.1% → 99.15 — Abbott (Healthcare)" in texts
-        assert "   MU -5.2% → 110.00 (Technology)" in texts
-        assert [t for t, _ in _sectors_pdf_lines(wire)] == ["Technology: -2.1% median (312 names)"]
         earnings = [t for t, _ in _earnings_wire_pdf_lines(wire)]
         assert "   JPM (2026-07-14): EPS 6.14 vs 5.91 est (+3.9%)" in earnings
         assert "   GOOGL — 2026-07-22 amc (est 2.97)" in earnings

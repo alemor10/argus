@@ -32,7 +32,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from argus.scout.screener import ScreenerRow
-from argus.scout.sectors import CANONICAL_SECTORS, OTHER, canonical_sector
+from argus.scout.sectors import canonical_sector
 
 
 class ScoutCriteria(BaseModel):

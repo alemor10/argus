@@ -27,7 +27,6 @@ from collections.abc import Sequence
 from datetime import date, timedelta
 
 from argus.digest import _event_line
-from argus.fields import Field
 from argus.models import (
     CHANGE_EVENT_ADAPTER,
     BellwetherEarning,
