@@ -28,6 +28,7 @@ from argus.models import (
     CompanyProfile,
     EarningsResultRecord,
     GatedObservation,
+    MarketWire,
     ParseFailure,
     ScorecardMark,
     ScoutCandidateRecord,
@@ -271,6 +272,17 @@ def write_bellwether_earnings(
                     r.revenue_actual,
                 ),
             )
+
+
+def write_market_wire(con: sqlite3.Connection, *, run_id: int, wire: "MarketWire") -> None:
+    """Persist the issue's market pages — one claims JSON blob per run, so
+    the magazine reproduces from SQL. OR REPLACE keeps re-entry idempotent
+    (a retried before_digest hook must not die on the primary key)."""
+    with con:
+        con.execute(
+            "INSERT OR REPLACE INTO market_wire (run_id, payload) VALUES (?, ?)",
+            (run_id, wire.model_dump_json()),
+        )
 
 
 def write_scorecard_marks(

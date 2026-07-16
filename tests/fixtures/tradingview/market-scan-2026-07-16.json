@@ -1,0 +1,1045 @@
+{
+ "totalCount": 1781,
+ "data": [
+  {
+   "s": "NASDAQ:NVDA",
+   "d": [
+    "NVDA",
+    "NVIDIA Corporation",
+    "Electronic Technology",
+    206.94,
+    -2.616470588235295,
+    5007948000000,
+    236.54,
+    164.07
+   ]
+  },
+  {
+   "s": "NASDAQ:AAPL",
+   "d": [
+    "AAPL",
+    "Apple Inc.",
+    "Electronic Technology",
+    330.59,
+    0.9435114503816717,
+    4855493167256.018,
+    331.41,
+    201.5
+   ]
+  },
+  {
+   "s": "NASDAQ:GOOG",
+   "d": [
+    "GOOG",
+    "Alphabet Inc. Class C",
+    "Technology Services",
+    370.835,
+    0.16882310040247428,
+    4519427064041.08,
+    404.47,
+    184.73
+   ]
+  },
+  {
+   "s": "NASDAQ:MSFT",
+   "d": [
+    "MSFT",
+    "Microsoft Corporation",
+    "Technology Services",
+    398.505,
+    0.7266890781791068,
+    2960268354977.228,
+    555.45,
+    349.2
+   ]
+  },
+  {
+   "s": "NASDAQ:AMZN",
+   "d": [
+    "AMZN",
+    "Amazon.com, Inc.",
+    "Retail Trade",
+    255.505,
+    0.21375902102290065,
+    2748495303235.756,
+    278.56,
+    196
+   ]
+  },
+  {
+   "s": "NASDAQ:AVGO",
+   "d": [
+    "AVGO",
+    "Broadcom Inc.",
+    "Electronic Technology",
+    381.18,
+    -3.322511920462607,
+    1813494368565.5051,
+    495,
+    273
+   ]
+  },
+  {
+   "s": "NASDAQ:SPCX",
+   "d": [
+    "SPCX",
+    "Space Exploration Technologies Corp",
+    "Communications",
+    135.14,
+    -0.09610408812007383,
+    1792919518684.1792,
+    225.64,
+    132.1501
+   ]
+  },
+  {
+   "s": "NASDAQ:META",
+   "d": [
+    "META",
+    "Meta Platforms Inc Class A",
+    "Technology Services",
+    675.94,
+    -0.7881874623886178,
+    1715821721745.3894,
+    796.25,
+    520.26
+   ]
+  },
+  {
+   "s": "NASDAQ:TSLA",
+   "d": [
+    "TSLA",
+    "Tesla, Inc.",
+    "Consumer Durables",
+    393.66,
+    -0.2028089033108438,
+    1478478133265.836,
+    498.83,
+    297.82
+   ]
+  },
+  {
+   "s": "NYSE:LLY",
+   "d": [
+    "LLY",
+    "Eli Lilly and Company",
+    "Health Technology",
+    1186.85,
+    2.612762940611933,
+    1117705778238.1152,
+    1249.45,
+    623.78
+   ]
+  },
+  {
+   "s": "NYSE:BRK.A",
+   "d": [
+    "BRK.A",
+    "Berkshire Hathaway Inc. Class A",
+    "Finance",
+    733847.01,
+    0.09097493112196314,
+    1054589485538.9592,
+    775000,
+    685150.0012
+   ]
+  },
+  {
+   "s": "NASDAQ:MU",
+   "d": [
+    "MU",
+    "Micron Technology, Inc.",
+    "Electronic Technology",
+    856.97,
+    -5.2317866147653325,
+    967856007475.2185,
+    1255,
+    103.38
+   ]
+  },
+  {
+   "s": "NYSE:JPM",
+   "d": [
+    "JPM",
+    "JPMorgan Chase & Co.",
+    "Finance",
+    345.3275,
+    -0.4561701882332705,
+    925309008515.6699,
+    351.24,
+    279.1
+   ]
+  },
+  {
+   "s": "NASDAQ:WMT",
+   "d": [
+    "WMT",
+    "Walmart Inc.",
+    "Retail Trade",
+    114.34,
+    1.6084599662312293,
+    909926754601.569,
+    135.155,
+    94.43
+   ]
+  },
+  {
+   "s": "NASDAQ:AMD",
+   "d": [
+    "AMD",
+    "Advanced Micro Devices, Inc.",
+    "Electronic Technology",
+    508.81,
+    -3.842083380579806,
+    829665907099.1694,
+    584.73,
+    149.22
+   ]
+  },
+  {
+   "s": "NYSE:V",
+   "d": [
+    "V",
+    "Visa Inc. Class A",
+    "Finance",
+    361.4,
+    1.7626851382553335,
+    680922753833.3615,
+    365.02,
+    293.89
+   ]
+  },
+  {
+   "s": "NYSE:XOM",
+   "d": [
+    "XOM",
+    "Exxonmobil Holdings Corporation",
+    null,
+    146.47,
+    1.3563075219708034,
+    607039056200,
+    176.41,
+    105.525
+   ]
+  },
+  {
+   "s": "NYSE:JNJ",
+   "d": [
+    "JNJ",
+    "Johnson & Johnson",
+    "Health Technology",
+    249.44,
+    0.979677758885915,
+    600456229096.011,
+    269.43,
+    162.78
+   ]
+  },
+  {
+   "s": "NASDAQ:INTC",
+   "d": [
+    "INTC",
+    "Intel Corporation",
+    "Electronic Technology",
+    98.7,
+    -4.16545295659772,
+    496066189710.2448,
+    142.35,
+    18.965
+   ]
+  },
+  {
+   "s": "NYSE:MA",
+   "d": [
+    "MA",
+    "Mastercard Incorporated Class A",
+    "Finance",
+    548.16,
+    2.419610993815499,
+    484345359481.24786,
+    601.77,
+    464.52
+   ]
+  },
+  {
+   "s": "NASDAQ:AMAT",
+   "d": [
+    "AMAT",
+    "Applied Materials, Inc.",
+    "Producer Manufacturing",
+    572.57,
+    -1.1839221303694838,
+    454597334565.1317,
+    739.67,
+    154.465
+   ]
+  },
+  {
+   "s": "NYSE:ABBV",
+   "d": [
+    "ABBV",
+    "AbbVie, Inc.",
+    "Health Technology",
+    251.235,
+    2.9187661300233496,
+    443880201945.0577,
+    261.635,
+    184.63
+   ]
+  },
+  {
+   "s": "NYSE:BAC",
+   "d": [
+    "BAC",
+    "Bank of America Corp",
+    "Finance",
+    61.52,
+    -0.1136548140931974,
+    436582238308.5267,
+    62.03,
+    44.75
+   ]
+  },
+  {
+   "s": "NASDAQ:CSCO",
+   "d": [
+    "CSCO",
+    "Cisco Systems, Inc.",
+    "Electronic Technology",
+    108.25,
+    -3.1493245056813066,
+    426660305849.82556,
+    130.3656,
+    65.75
+   ]
+  },
+  {
+   "s": "NASDAQ:COST",
+   "d": [
+    "COST",
+    "Costco Wholesale Corporation",
+    "Retail Trade",
+    934.175,
+    1.9240840552512701,
+    414286817489.3247,
+    1096.5,
+    844.06
+   ]
+  },
+  {
+   "s": "NYSE:CAT",
+   "d": [
+    "CAT",
+    "Caterpillar Inc.",
+    "Producer Manufacturing",
+    891.11,
+    -2.5363666192715675,
+    410478252909.7897,
+    1073.46,
+    405.46
+   ]
+  },
+  {
+   "s": "NASDAQ:LRCX",
+   "d": [
+    "LRCX",
+    "Lam Research Corporation",
+    "Producer Manufacturing",
+    325.43,
+    -2.9812479503920337,
+    406973326262.838,
+    438.5,
+    90.935
+   ]
+  },
+  {
+   "s": "NYSE:UNH",
+   "d": [
+    "UNH",
+    "UnitedHealth Group Incorporated",
+    "Health Services",
+    432.92,
+    3.4406957851476716,
+    393153840877.9876,
+    461.62,
+    234.6
+   ]
+  },
+  {
+   "s": "NYSE:CVX",
+   "d": [
+    "CVX",
+    "Chevron Corporation",
+    "Energy Minerals",
+    184.105,
+    1.3794052863436097,
+    366663121301.3733,
+    214.71,
+    146.49
+   ]
+  },
+  {
+   "s": "NYSE:ORCL",
+   "d": [
+    "ORCL",
+    "Oracle Corporation",
+    "Technology Services",
+    126.98,
+    -4.158804438070801,
+    365762216048.5281,
+    345.72,
+    125.93
+   ]
+  },
+  {
+   "s": "NYSE:KO",
+   "d": [
+    "KO",
+    "Coca-Cola Company",
+    "Consumer Non-Durables",
+    84.32,
+    2.26804123711339,
+    362785304384.0989,
+    85.68,
+    65.3538
+   ]
+  },
+  {
+   "s": "NYSE:GE",
+   "d": [
+    "GE",
+    "GE Aerospace",
+    "Electronic Technology",
+    345.4575,
+    -4.132787567642581,
+    360428694605.3326,
+    382.97,
+    254.66
+   ]
+  },
+  {
+   "s": "NYSE:PG",
+   "d": [
+    "PG",
+    "Procter & Gamble Company",
+    "Consumer Non-Durables",
+    150.39,
+    1.5805471124619892,
+    350198029039.67413,
+    167.25,
+    137.62
+   ]
+  },
+  {
+   "s": "NYSE:MS",
+   "d": [
+    "MS",
+    "Morgan Stanley",
+    "Finance",
+    220.7,
+    -3.4346970028440262,
+    348106784750.6156,
+    232.25,
+    136.17
+   ]
+  },
+  {
+   "s": "NYSE:HD",
+   "d": [
+    "HD",
+    "Home Depot, Inc.",
+    "Retail Trade",
+    348.76,
+    2.1438612933458274,
+    347754422506.4789,
+    426.75,
+    289.1
+   ]
+  },
+  {
+   "s": "NYSE:GS",
+   "d": [
+    "GS",
+    "Goldman Sachs Group, Inc.",
+    "Finance",
+    1112.81,
+    -3.4077790412040927,
+    328287187039.7691,
+    1153.99,
+    691.88
+   ]
+  },
+  {
+   "s": "NASDAQ:PLTR",
+   "d": [
+    "PLTR",
+    "Palantir Technologies Inc. Class A",
+    "Technology Services",
+    132.65,
+    -0.8298444976076446,
+    318003462084.42285,
+    207.52,
+    106.37
+   ]
+  },
+  {
+   "s": "NYSE:MRK",
+   "d": [
+    "MRK",
+    "Merck & Co., Inc.",
+    "Health Technology",
+    127.755,
+    3.3532885688860095,
+    315532425814.2187,
+    130.29,
+    76.66
+   ]
+  },
+  {
+   "s": "NASDAQ:NFLX",
+   "d": [
+    "NFLX",
+    "Netflix, Inc.",
+    "Technology Services",
+    73.7299,
+    0.0677252985884824,
+    310461741803.0287,
+    126.71,
+    70.86
+   ]
+  },
+  {
+   "s": "NASDAQ:PANW",
+   "d": [
+    "PANW",
+    "Palo Alto Networks, Inc.",
+    "Technology Services",
+    357.065,
+    0.8601208971244608,
+    291007965968.9848,
+    368.17,
+    139.5706
+   ]
+  },
+  {
+   "s": "NYSE:PM",
+   "d": [
+    "PM",
+    "Philip Morris International Inc.",
+    "Consumer Non-Durables",
+    186.01,
+    2.83613445378151,
+    289907537262.2185,
+    193.05,
+    142.11
+   ]
+  },
+  {
+   "s": "NASDAQ:KLAC",
+   "d": [
+    "KLAC",
+    "KLA Corporation",
+    "Electronic Technology",
+    221.9301,
+    -1.1447216035634697,
+    289901800978.3359,
+    307.3743,
+    83.224
+   ]
+  },
+  {
+   "s": "NYSE:GEV",
+   "d": [
+    "GEV",
+    "GE Vernova Inc.",
+    "Producer Manufacturing",
+    1034.075,
+    -2.00941930103858,
+    277876642976.9171,
+    1195.94,
+    530.16
+   ]
+  },
+  {
+   "s": "NYSE:WFC",
+   "d": [
+    "WFC",
+    "Wells Fargo & Company",
+    "Finance",
+    88.375,
+    0.9884584618900637,
+    270444249521.5689,
+    97.76,
+    72.775
+   ]
+  },
+  {
+   "s": "NASDAQ:TXN",
+   "d": [
+    "TXN",
+    "Texas Instruments Incorporated",
+    "Electronic Technology",
+    289.66,
+    -3.8281483448985596,
+    263617492570.4619,
+    334.03,
+    152.73
+   ]
+  },
+  {
+   "s": "NYSE:RTX",
+   "d": [
+    "RTX",
+    "RTX Corporation",
+    "Electronic Technology",
+    194.91,
+    -0.5002807698197916,
+    262482050854.49503,
+    214.5,
+    143.56
+   ]
+  },
+  {
+   "s": "NYSE:DELL",
+   "d": [
+    "DELL",
+    "Dell Technologies, Inc. Class C",
+    "Electronic Technology",
+    403.73,
+    -2.1687506057962556,
+    261730500803.06006,
+    469.47,
+    110.22
+   ]
+  },
+  {
+   "s": "NYSE:AXP",
+   "d": [
+    "AXP",
+    "American Express Company",
+    "Finance",
+    362.9399,
+    1.25541234237251,
+    247643482882.33585,
+    387.49,
+    288.34
+   ]
+  },
+  {
+   "s": "NASDAQ:LIN",
+   "d": [
+    "LIN",
+    "Linde plc",
+    "Process Industries",
+    517.08,
+    0.5698726052708478,
+    239200970033.5789,
+    548.2,
+    387.78
+   ]
+  },
+  {
+   "s": "NYSE:C",
+   "d": [
+    "C",
+    "Citigroup Inc.",
+    "Finance",
+    132.82,
+    -1.5345837348950948,
+    227774009227.71384,
+    147.96,
+    87.94
+   ]
+  },
+  {
+   "s": "NASDAQ:SNDK",
+   "d": [
+    "SNDK",
+    "Sandisk Corporation",
+    "Electronic Technology",
+    1463.28,
+    -9.394427244582044,
+    216696794923.52307,
+    2354.3899,
+    40.1
+   ]
+  },
+  {
+   "s": "NASDAQ:CRWD",
+   "d": [
+    "CRWD",
+    "CrowdStrike Holdings, Inc. Class A",
+    "Technology Services",
+    206.025,
+    -0.36030371910819003,
+    209786871949.70343,
+    217.5,
+    85.68
+   ]
+  },
+  {
+   "s": "NYSE:ANET",
+   "d": [
+    "ANET",
+    "Arista Networks Inc",
+    "Electronic Technology",
+    165.59,
+    -3.68194509073987,
+    208511362393.4645,
+    189.817,
+    106.987
+   ]
+  },
+  {
+   "s": "NASDAQ:TMUS",
+   "d": [
+    "TMUS",
+    "T-Mobile US, Inc.",
+    "Communications",
+    191.96,
+    2.3131862274810806,
+    207740011092.47098,
+    261.56,
+    165.66
+   ]
+  },
+  {
+   "s": "NYSE:IBM",
+   "d": [
+    "IBM",
+    "International Business Machines Corporation",
+    "Technology Services",
+    214.03,
+    1.3399621212121273,
+    201163637987.12457,
+    332.46,
+    204.44
+   ]
+  },
+  {
+   "s": "NYSE:TMO",
+   "d": [
+    "TMO",
+    "Thermo Fisher Scientific Inc.",
+    "Health Technology",
+    540.265,
+    0.9294027536475599,
+    200774059824.4154,
+    643.99,
+    403.36
+   ]
+  },
+  {
+   "s": "NASDAQ:AMGN",
+   "d": [
+    "AMGN",
+    "Amgen Inc.",
+    "Health Technology",
+    367.57,
+    2.581491404331324,
+    198380566225.61682,
+    391.29,
+    269.77
+   ]
+  },
+  {
+   "s": "NYSE:MCD",
+   "d": [
+    "MCD",
+    "McDonald's Corporation",
+    "Consumer Services",
+    271.83,
+    2.5967163615776547,
+    193136816652.7286,
+    341.75,
+    264.09
+   ]
+  },
+  {
+   "s": "NYSE:APH",
+   "d": [
+    "APH",
+    "Amphenol Corporation Class A",
+    "Electronic Technology",
+    154.02,
+    -1.9230769230769118,
+    189480709137.6923,
+    178.52,
+    95.19
+   ]
+  },
+  {
+   "s": "NASDAQ:PEP",
+   "d": [
+    "PEP",
+    "PepsiCo, Inc.",
+    "Consumer Non-Durables",
+    138.35,
+    2.1787296898079678,
+    188832727676.00848,
+    171.48,
+    134.6546
+   ]
+  },
+  {
+   "s": "NYSE:NEE",
+   "d": [
+    "NEE",
+    "NextEra Energy, Inc.",
+    "Utilities",
+    89.6101,
+    0.5725028058361487,
+    186891311414.3888,
+    98.75,
+    69.24
+   ]
+  },
+  {
+   "s": "NASDAQ:ADI",
+   "d": [
+    "ADI",
+    "Analog Devices, Inc.",
+    "Electronic Technology",
+    381.51,
+    -2.417127071823202,
+    185828571093.15747,
+    445.91,
+    218.37
+   ]
+  },
+  {
+   "s": "NYSE:VZ",
+   "d": [
+    "VZ",
+    "Verizon Communications Inc.",
+    "Communications",
+    43.855,
+    2.3931823488209165,
+    183119151371.05524,
+    51.68,
+    38.39
+   ]
+  },
+  {
+   "s": "NASDAQ:QCOM",
+   "d": [
+    "QCOM",
+    "QUALCOMM Incorporated",
+    "Electronic Technology",
+    173.1,
+    -2.741881110237103,
+    182447395620.46692,
+    259.92,
+    121.99
+   ]
+  },
+  {
+   "s": "NYSE:SCHW",
+   "d": [
+    "SCHW",
+    "Charles Schwab Corp",
+    "Finance",
+    103.055,
+    0.2578071796867405,
+    179226610347.0861,
+    107.5,
+    83.96
+   ]
+  },
+  {
+   "s": "NYSE:BLK",
+   "d": [
+    "BLK",
+    "BlackRock, Inc.",
+    "Finance",
+    1099.415,
+    0.550118895189306,
+    178767432365.6972,
+    1219.9399,
+    917.39
+   ]
+  },
+  {
+   "s": "NYSE:UNP",
+   "d": [
+    "UNP",
+    "Union Pacific Corporation",
+    "Transportation",
+    299.67,
+    3.9221806075738663,
+    177918024347.39035,
+    300.06,
+    210.84
+   ]
+  },
+  {
+   "s": "NYSE:ABT",
+   "d": [
+    "ABT",
+    "Abbott Laboratories",
+    "Health Technology",
+    99.19,
+    11.112355774616335,
+    172770363270.34714,
+    137.49,
+    81.97
+   ]
+  },
+  {
+   "s": "NASDAQ:STX",
+   "d": [
+    "STX",
+    "Seagate Technology Holdings PLC",
+    "Electronic Technology",
+    766.57,
+    -7.452613787275131,
+    171887213294.74734,
+    1145,
+    138.3
+   ]
+  },
+  {
+   "s": "NYSE:DIS",
+   "d": [
+    "DIS",
+    "Walt Disney Company",
+    "Consumer Services",
+    98.68,
+    1.5748841996912004,
+    171358942960.11652,
+    123.4,
+    92.185
+   ]
+  },
+  {
+   "s": "NYSE:BA",
+   "d": [
+    "BA",
+    "Boeing Company",
+    "Electronic Technology",
+    217.24,
+    -0.40344764349898926,
+    171250789367.2551,
+    254.3499,
+    176.77
+   ]
+  },
+  {
+   "s": "NYSE:TJX",
+   "d": [
+    "TJX",
+    "TJX Companies Inc",
+    "Retail Trade",
+    154.7114,
+    2.4782407100748487,
+    170910376177.14026,
+    170,
+    122
+   ]
+  },
+  {
+   "s": "NYSE:WELL",
+   "d": [
+    "WELL",
+    "Welltower Inc.",
+    "Finance",
+    240.125,
+    2.929829825539032,
+    169507697316.39536,
+    240.4125,
+    156.955
+   ]
+  },
+  {
+   "s": "NASDAQ:MRVL",
+   "d": [
+    "MRVL",
+    "Marvell Technology, Inc.",
+    "Electronic Technology",
+    191.53,
+    -7.141471928633758,
+    167735537659.70035,
+    329.88,
+    61.44
+   ]
+  },
+  {
+   "s": "NASDAQ:GILD",
+   "d": [
+    "GILD",
+    "Gilead Sciences, Inc.",
+    "Health Technology",
+    132.89,
+    0.9035687167805602,
+    164992210117.58765,
+    157.29,
+    107.75
+   ]
+  },
+  {
+   "s": "NASDAQ:SHOP",
+   "d": [
+    "SHOP",
+    "Shopify, Inc. Class A",
+    "Commercial Services",
+    126.12,
+    2.0801295022258257,
+    163660204993.76117,
+    182.19,
+    94
+   ]
+  },
+  {
+   "s": "NASDAQ:WDC",
+   "d": [
+    "WDC",
+    "Western Digital Corporation",
+    "Electronic Technology",
+    474.44,
+    -7.667756500077852,
+    163530997785.30392,
+    799.87,
+    66.04
+   ]
+  },
+  {
+   "s": "NYSE:DE",
+   "d": [
+    "DE",
+    "Deere & Company",
+    "Producer Manufacturing",
+    597.24,
+    1.3164144669878521,
+    161217430705.96582,
+    674.1899,
+    433
+   ]
+  },
+  {
+   "s": "NASDAQ:IBKR",
+   "d": [
+    "IBKR",
+    "Interactive Brokers Group, Inc. Class A",
+    "Finance",
+    93.42,
+    -4.096088697259003,
+    158460135783.3,
+    97.84,
+    58.95
+   ]
+  },
+  {
+   "s": "NYSE:BX",
+   "d": [
+    "BX",
+    "Blackstone Inc.",
+    "Finance",
+    128.27,
+    0.9602518693427887,
+    156683625808.04645,
+    190.085,
+    101.73
+   ]
+  }
+ ]
+}

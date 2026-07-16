@@ -18,6 +18,7 @@ from argus.models import (
     EarningsResultRecord,
     FieldValue,
     MacroSpec,
+    MarketWire,
     QuarantinedObservation,
     QuarantineHit,
     RunReport,
@@ -334,7 +335,16 @@ def run_report(con: sqlite3.Connection, run_id: int) -> RunReport:
             else None
         ),
         bellwethers=_bellwether_earnings(con, run_id) if run["kind"] == "watch" else (),
+        market=_market_wire(con, run_id) if run["kind"] == "watch" else None,
     )
+
+
+def _market_wire(con: sqlite3.Connection, run_id: int) -> MarketWire | None:
+    """The issue's persisted market pages; None for quiet pulses and old runs."""
+    row = con.execute(
+        "SELECT payload FROM market_wire WHERE run_id = ?", (run_id,)
+    ).fetchone()
+    return MarketWire.model_validate_json(row["payload"]) if row is not None else None
 
 
 def _ticker_report(con: sqlite3.Connection, run_id: int, rt: sqlite3.Row) -> TickerReport:

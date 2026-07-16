@@ -71,6 +71,12 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       Discord/email deliver — the .md attaches only as the no-PDF fallback.
       Markdown remains the canonical on-disk record (bit-for-bit `report
       --run N`, golden byte-compares). See ARCHITECTURE.md, PDF-first delivery.
+- [x] The Argus Daily (v1.9, 2026-07-16): the digest is a MAGAZINE issue —
+      beside your desk and the macro dashboard, market-wide pages from one
+      scan + one calendar call (movers, sector pulse, earnings wire, 52-week
+      extremes; mechanical curation, claims-labeled). Tue–Sat issues post
+      always; Monday is a quiet events-only pulse; crypto/commodities joined
+      the macro strip. See ARCHITECTURE.md, The market wire.
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

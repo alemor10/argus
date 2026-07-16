@@ -141,6 +141,19 @@ def test_migrate_v6_adds_macro_column_and_bellwethers(tmp_path):
     con.close()
 
 
+def test_migrate_v7_adds_market_wire(tmp_path):
+    """The box sits at v7 after v1.7; the v1.9 step must add market_wire."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    con.execute("DROP TABLE market_wire")  # recreate a v7-shaped database
+    con.execute("PRAGMA user_version = 7")
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    assert "market_wire" in tables
+    con.close()
+
+
 def test_earnings_results_dedup_on_natural_key(con):
     insert = """INSERT OR IGNORE INTO earnings_results
         (ticker, quarter_end, eps_actual, eps_estimate, source, fetched_at, first_seen_run_id)

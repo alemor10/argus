@@ -168,6 +168,15 @@ CREATE TABLE bellwether_earnings (
     PRIMARY KEY (run_id, symbol, report_date)
 ) WITHOUT ROWID;
 
+-- The magazine issue's market pages (v1.9): movers, sector pulse, earnings
+-- wire, 52-week extremes — ONE claims-labeled JSON blob per watch run
+-- (models.MarketWire), persisted so `report --run N` reproduces the issue.
+-- Curation is mechanical (cap floors, top-N — see market.py), never judgment.
+CREATE TABLE market_wire (
+    run_id  INTEGER PRIMARY KEY REFERENCES runs(run_id),
+    payload TEXT    NOT NULL
+) WITHOUT ROWID;
+
 -- Scout self-scoring — an immutable forward log ("grade the grader"). On each
 -- scout run, every name scout has EVER proposed is scored: total return since
 -- it first surfaced vs SPY over the same window. Persisted per scoring run so

@@ -1053,6 +1053,48 @@ class TestPdfParity:
         assert _quarantine_pdf_lines(quiet)[0][0] == "No data quarantined this run."
 
 
+class TestMarketWirePage:
+    def _wire(self):
+        from argus.models import EarningsWireEntry, Extreme, MarketWire, Mover, SectorPulse
+
+        return MarketWire(
+            universe=1781,
+            gainers=(Mover(symbol="ABT", company="Abbott", sector="Healthcare",
+                           close=99.15, change_pct=11.07),),
+            losers=(Mover(symbol="MU", sector="Technology", close=110.0, change_pct=-5.2),),
+            sectors=(SectorPulse(sector="Technology", median_change_pct=-2.1, n=312),),
+            highs=(Extreme(symbol="AAPL", close=327.5, kind="high"),),
+            earnings_reported=(EarningsWireEntry(symbol="JPM", report_date=date(2026, 7, 14),
+                                                 eps_estimate=5.91, eps_actual=6.14),),
+            earnings_upcoming=(EarningsWireEntry(symbol="GOOGL", report_date=date(2026, 7, 22),
+                                                 hour="amc", eps_estimate=2.97),),
+        )
+
+    def test_magazine_issue_gains_the_wire_page(self):
+        report = _watch_report().model_copy(update={"market": self._wire()})
+        pdf = build_pdf(report, {})
+        assert _page_count(pdf) == 6  # news + wire + status + 3 tickers
+
+    def test_wire_lines_mirror_the_digest_numbers(self):
+        from argus.report_pdf import (
+            _earnings_wire_pdf_lines,
+            _extremes_pdf_lines,
+            _movers_pdf_lines,
+            _sectors_pdf_lines,
+        )
+
+        wire = self._wire()
+        texts = [t for t, _tone in _movers_pdf_lines(wire)]
+        assert "   ABT +11.1% → 99.15 — Abbott (Healthcare)" in texts
+        assert "   MU -5.2% → 110.00 (Technology)" in texts
+        assert [t for t, _ in _sectors_pdf_lines(wire)] == ["Technology: -2.1% median (312 names)"]
+        earnings = [t for t, _ in _earnings_wire_pdf_lines(wire)]
+        assert "   JPM (2026-07-14): EPS 6.14 vs 5.91 est (+3.9%)" in earnings
+        assert "   GOOGL — 2026-07-22 amc (est 2.97)" in earnings
+        extremes = [t for t, _ in _extremes_pdf_lines(wire)]
+        assert "   AAPL 327.50" in extremes
+
+
 class TestThesisChecks:
     def test_rows_render_each_standing(self):
         # Panel content at the pure seam (text is compressed inside the PDF

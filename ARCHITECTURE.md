@@ -782,6 +782,29 @@ byte-compare, and what lands on disk beside the PDF for grepping — the PDF
 is deterministic too (CreationDate suppressed) but only within a matplotlib
 version, so text stays the reproducibility contract.
 
+## The market wire — v1.9 ("The Argus Daily")
+
+The digest is a magazine issue, not just an alert channel: a watchlist-only
+lens is tunnel vision, so magazine runs carry market-wide pages beside YOUR
+desk. ONE extra TradingView scan (magazine columns — `change`,
+`price_52_week_high/low`, verified live 2026-07-16) plus the Finnhub calendar
+feed four sections: **Market movers** (top 5 each way, last session, caps ≥
+$10B), **Sector pulse** (median change per canonical sector over the whole
+scanned universe), **Earnings wire** (reported, surprise-ranked + upcoming,
+cap-ranked; pinned bellwethers always qualify — replaces the v1.7 bellwether
+section, whose table still renders for old runs), and **New 52-week
+extremes** (within 0.5% of the mark). Curation is mechanical and disclosed
+in the captions — cap floors, top-N, tolerance (market.py constants); Argus
+never decides "importance" by judgment. All of it is claims-labeled context:
+never gated, never observations, never a delivery trigger.
+
+The wire is fetched only on MAGAZINE runs (`--deliver always` — issues
+arrive on schedule; quiet pulses are alerts and skip it) and persists whole
+as one JSON blob per run (`market_wire`, schema v8) so `report --run N`
+reproduces the issue. Cadence: Tue–Sat issues post always (each covers a
+real trading day); Monday is a quiet events-only pulse (its market data
+would reprint Saturday's); Sunday carries scout + the weekly recap.
+
 ## Scout self-scoring — v1.5 ("grade the grader")
 
 A discovery engine you can't check is one you can't trust. Each scout run now

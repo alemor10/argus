@@ -191,8 +191,11 @@ def build_pdf(
         if report.kind == "watch":
             # PDF-first (v1.8): the PDF is the delivered artifact, so it
             # carries the WHOLE digest — page 1 is the news (Macro, Changes,
-            # Bellwethers), page 2 the state (watchlist table, quarantines,
+            # Bellwethers), the market-wire page follows on magazine issues
+            # (v1.9), then the state page (watchlist table, quarantines,
             # data health), then the per-ticker detail pages.
+            if report.market is not None:
+                _save(pdf, _market_wire_page(report))
             _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
@@ -631,6 +634,99 @@ def _watch_status_page(report: RunReport) -> Figure:
         cur.line(text, size=8.5, color=tone)
     _page_footer(fig, report)
     return fig
+
+
+def _market_wire_page(report: RunReport) -> Figure:
+    """The magazine's market pages: movers, sector pulse, earnings wire,
+    52-week extremes — all claims-labeled, curated by the mechanical rules
+    in market.py."""
+    fig = plt.figure(figsize=_PAGE)
+    cur = _Cursor(fig)
+    cur.line("The market, last session", size=13, weight="bold")
+    cur.gap(0.014)
+    wire = report.market
+    assert wire is not None  # build_pdf only routes here when present
+    _block(cur, "Market movers", _movers_pdf_lines(wire), 14)
+    _block(cur, "Sector pulse", _sectors_pdf_lines(wire), 13)
+    _block(cur, "Earnings wire", _earnings_wire_pdf_lines(wire), 22)
+    _block(cur, "New 52-week extremes", _extremes_pdf_lines(wire), 20)
+    cur.line(
+        "Claims-labeled context (tradingview + finnhub), mechanical curation — "
+        "never gated, never a delivery trigger.",
+        size=8, color=_MUTED, style="italic",
+    )
+    _page_footer(fig, report)
+    return fig
+
+
+def _movers_pdf_lines(wire) -> list[tuple[str, str]]:
+    if not wire.gainers and not wire.losers:
+        return [("No large-cap gainers or losers last session — a flat tape is information.",
+                 _SECONDARY)]
+    lines: list[tuple[str, str]] = []
+    for title, movers in (("Gainers:", wire.gainers), ("Losers:", wire.losers)):
+        if not movers:
+            continue
+        lines.append((title, _SECONDARY))
+        for m in movers:
+            name = f" — {m.company}" if m.company else ""
+            lines.append(
+                (_clip(f"   {m.symbol} {m.change_pct:+.1f}% → {m.close:.2f}{name} ({m.sector})", 114),
+                 _INK)
+            )
+    return lines
+
+
+def _sectors_pdf_lines(wire) -> list[tuple[str, str]]:
+    if not wire.sectors:
+        return [("No sector data in the scan this issue.", _SECONDARY)]
+    return [
+        (f"{p.sector}: {p.median_change_pct:+.1f}% median ({p.n} names)", _INK)
+        for p in wire.sectors
+    ]
+
+
+def _earnings_wire_pdf_lines(wire) -> list[tuple[str, str]]:
+    if not wire.earnings_reported and not wire.earnings_upcoming:
+        return [("No large-cap earnings reported or scheduled in the window.", _SECONDARY)]
+    lines: list[tuple[str, str]] = []
+    if wire.earnings_reported:
+        lines.append(("Reported:", _SECONDARY))
+        for b in wire.earnings_reported:
+            text = f"   {b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
+            if b.eps_estimate is not None:
+                text += f" vs {b.eps_estimate:.2f} est"
+                if b.eps_estimate != 0:
+                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                    text += f" ({surprise:+.1f}%)"
+            lines.append((text, _INK))
+    if wire.earnings_upcoming:
+        lines.append(("Upcoming:", _SECONDARY))
+        for b in wire.earnings_upcoming:
+            when = b.report_date.isoformat() + (f" {b.hour}" if b.hour else "")
+            text = f"   {b.symbol} — {when}"
+            if b.eps_estimate is not None:
+                text += f" (est {b.eps_estimate:.2f})"
+            lines.append((text, _INK))
+        if wire.earnings_more_upcoming:
+            lines.append(
+                (f"   … and {wire.earnings_more_upcoming} more large caps this week.", _MUTED)
+            )
+    return lines
+
+
+def _extremes_pdf_lines(wire) -> list[tuple[str, str]]:
+    if not wire.highs and not wire.lows:
+        return [("No large caps at 52-week marks last session.", _SECONDARY)]
+    lines: list[tuple[str, str]] = []
+    for title, extremes in (("At highs:", wire.highs), ("At lows:", wire.lows)):
+        if not extremes:
+            continue
+        lines.append((title, _SECONDARY))
+        for e in extremes:
+            name = f" — {e.company}" if e.company else ""
+            lines.append((_clip(f"   {e.symbol} {e.close:.2f}{name}", 114), _INK))
+    return lines
 
 
 def _sorted_watch_then_macro(report: RunReport) -> list[TickerReport]:

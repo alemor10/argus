@@ -601,6 +601,62 @@ class BellwetherEarning(BaseModel):
     revenue_actual: float | None = None
 
 
+# --- The market wire: the magazine issue's market-wide pages (claims-labeled,
+# --- single unofficial sources, curated by mechanical rules in market.py,
+# --- persisted whole per run so the issue reproduces bit-for-bit).
+
+
+class Mover(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    company: str | None = None
+    sector: str = "Other"
+    close: float
+    change_pct: float
+
+
+class SectorPulse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    sector: str
+    median_change_pct: float
+    n: int
+
+
+class Extreme(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    symbol: str
+    company: str | None = None
+    close: float
+    kind: str  # "high" | "low"
+
+
+class EarningsWireEntry(BellwetherEarning):
+    """A calendar row with the scan's market cap riding along (claims)."""
+
+    market_cap: float | None = None
+
+
+class MarketWire(BaseModel):
+    """One issue's market pages — movers, sector pulse, earnings wire,
+    52-week extremes. Absent (None on RunReport) for quiet pulses and old
+    runs; the digest renders the sections only when present."""
+
+    model_config = ConfigDict(frozen=True)
+
+    universe: int  # scanned rows behind the curation
+    gainers: tuple[Mover, ...] = ()
+    losers: tuple[Mover, ...] = ()
+    sectors: tuple[SectorPulse, ...] = ()
+    highs: tuple[Extreme, ...] = ()
+    lows: tuple[Extreme, ...] = ()
+    earnings_reported: tuple[EarningsWireEntry, ...] = ()
+    earnings_upcoming: tuple[EarningsWireEntry, ...] = ()
+    earnings_more_upcoming: int = 0  # large-cap reporters beyond the shown cap
+
+
 class ScorecardMark(BaseModel):
     """One name's realized standing as of a scoring run — total return since
     scout first proposed it, vs SPY over the same window. Immutable once
@@ -657,4 +713,5 @@ class RunReport(BaseModel):
     tickers: tuple[TickerReport, ...] = ()
     scout: tuple[ScoutProposal, ...] = ()  # populated for kind='scout' only
     scorecard: Scorecard | None = None  # scout self-scoring, when there is history
-    bellwethers: tuple[BellwetherEarning, ...] = ()  # watch-run market context (claims)
+    bellwethers: tuple[BellwetherEarning, ...] = ()  # pre-v1.9 runs' market context (claims)
+    market: MarketWire | None = None  # the magazine issue's market pages (claims)

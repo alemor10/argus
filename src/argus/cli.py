@@ -147,14 +147,17 @@ series:
     source: fred
     label: "Fed funds (effective)"
     unit: "%"
-#  - symbol: "DX-Y.NYB"
-#    label: "US dollar index"
-#  - symbol: "GC=F"
-#    label: "Gold (front future)"
-#    decimals: 0
-#  - symbol: "BTC-USD"
-#    label: "Bitcoin"
-#    decimals: 0
+  # -- crypto & commodities strip (note: BTC trades 24/7 — weekend moves are real) --
+  - symbol: "DX-Y.NYB"
+    label: "US dollar index"
+  - symbol: "GC=F"
+    label: "Gold (front future)"
+    decimals: 0
+  - symbol: "CL=F"
+    label: "WTI crude (front future)"
+  - symbol: "BTC-USD"
+    label: "Bitcoin"
+    decimals: 0
 #  - symbol: "ICSA"
 #    source: fred
 #    label: "Initial jobless claims"
@@ -286,33 +289,42 @@ def _pdf_artifact_builder():
     return build
 
 
-def _bellwether_step(bellwethers: tuple[str, ...]):
-    """before_digest hook for watch runs: one calendar GET, filtered to the
-    bellwether list, persisted per run (claims-labeled). Failures append a
-    run note — context is optional, the digest is not. Returns None when the
-    section is off (empty list / no Finnhub key)."""
+def _market_wire_step(bellwethers: tuple[str, ...], deliver: "DeliverPolicy"):
+    """before_digest hook for MAGAZINE watch runs (--deliver always): one
+    market scan + one calendar GET → the issue's market pages (movers, sector
+    pulse, earnings wire, 52-week extremes), persisted per run. Quiet pulses
+    (events-only) skip the wire — they are alerts, not issues. Failures
+    append a run note; the digest must always land."""
     from datetime import date, timedelta
 
     from argus.store import writer
 
-    api_key = resolve_secrets().finnhub_api_key
-    if not bellwethers or not api_key:
+    if deliver is not DeliverPolicy.ALWAYS:
         return None
-    allow = {symbol.strip().upper() for symbol in bellwethers}
+    api_key = resolve_secrets().finnhub_api_key
+    pins = frozenset(symbol.strip().upper() for symbol in bellwethers)
 
     def step(con, run_id: int) -> None:
+        from argus.market import MarketScanner, build_wire
+
         today = date.today()
         try:
-            rows = [
-                r
-                for r in FinnhubSource(api_key).earnings_calendar(
-                    frm=today - timedelta(days=7), to=today + timedelta(days=7)
+            rows = MarketScanner().scan()
+        except Exception as exc:
+            writer.append_run_note(con, run_id=run_id, note=f"market wire unavailable: {exc}")
+            return
+        calendar = []
+        if api_key:
+            try:
+                calendar = FinnhubSource(api_key).earnings_calendar(
+                    frm=today - timedelta(days=1), to=today + timedelta(days=7)
                 )
-                if r.symbol.upper() in allow
-            ]
-            writer.write_bellwether_earnings(con, run_id=run_id, rows=rows)
-        except Exception as exc:  # the section is context; the digest must land
-            writer.append_run_note(con, run_id=run_id, note=f"bellwether calendar unavailable: {exc}")
+            except Exception as exc:
+                writer.append_run_note(
+                    con, run_id=run_id, note=f"earnings calendar unavailable: {exc}"
+                )
+        wire = build_wire(rows, calendar, pins=pins, today=today)
+        writer.write_market_wire(con, run_id=run_id, wire=wire)
 
     return step
 
@@ -420,7 +432,7 @@ def watch(
             app_version=argus.__version__,
             artifact_builder=_pdf_artifact_builder(),
             gated_sink=gated_sink,
-            before_digest=_bellwether_step(macro_config.bellwethers),
+            before_digest=_market_wire_step(macro_config.bellwethers, deliver),
         )
     finally:
         con.close()

@@ -397,6 +397,49 @@ class TestBellwetherSection:
         assert "Bellwether" not in out
 
 
+class TestMarketWireSections:
+    def _wire_report(self):
+        from argus.models import EarningsWireEntry, Extreme, MarketWire, Mover, SectorPulse
+
+        wire = MarketWire(
+            universe=1781,
+            gainers=(Mover(symbol="ABT", company="Abbott Laboratories", sector="Healthcare",
+                           close=99.15, change_pct=11.07),),
+            losers=(Mover(symbol="MU", company="Micron", sector="Technology",
+                          close=110.0, change_pct=-5.2),),
+            sectors=(SectorPulse(sector="Healthcare", median_change_pct=1.2, n=140),
+                     SectorPulse(sector="Technology", median_change_pct=-2.1, n=312)),
+            highs=(Extreme(symbol="AAPL", company="Apple", close=327.5, kind="high"),),
+            lows=(Extreme(symbol="NKE", company="Nike", close=48.2, kind="low"),),
+            earnings_reported=(EarningsWireEntry(symbol="JPM", report_date=date(2026, 7, 14),
+                                                 eps_estimate=5.91, eps_actual=6.14),),
+            earnings_upcoming=(EarningsWireEntry(symbol="GOOGL", report_date=date(2026, 7, 22),
+                                                 hour="amc", eps_estimate=2.97),),
+            earnings_more_upcoming=3,
+        )
+        return RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(_quiet_ticker(),), market=wire,
+        )
+
+    def test_all_four_sections_render_with_disclosed_curation(self):
+        out = render(self._wire_report())
+        assert "- ABT +11.1% → 99.15 — Abbott Laboratories (Healthcare)" in out
+        assert "- MU -5.2% → 110.00 — Micron (Technology)" in out
+        assert "_Top 5 each way, last session, caps ≥ $10B (1781 names scanned)._" in out
+        assert "- Technology: -2.1% median (312 names)" in out
+        assert "- JPM (2026-07-14): EPS 6.14 vs 5.91 est (+3.9%)" in out
+        assert "- GOOGL — 2026-07-22 amc (est 2.97)" in out
+        assert "- … and 3 more large caps this week." in out
+        assert "- AAPL 327.50 — Apple" in out
+        assert "- NKE 48.20 — Nike" in out
+
+    def test_quiet_pulse_has_no_wire_sections(self):
+        out = render(_report([_quiet_ticker()]))
+        assert "Market movers" not in out
+        assert "Sector pulse" not in out
+
+
 class TestQuarantineTable:
     def test_lists_quarantine_coexisting_with_accepted_primary(self):
         """Snapshot.quarantined only carries fields that went fully dark; the

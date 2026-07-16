@@ -469,6 +469,30 @@ def test_bellwether_earnings_round_trip(con):
     assert report.bellwethers[1].eps_actual is None
 
 
+def test_market_wire_round_trips_through_run_report(con):
+    from argus.models import MarketWire, Mover, SectorPulse
+
+    wire = MarketWire(
+        universe=1781,
+        gainers=(Mover(symbol="ABT", sector="Healthcare", close=99.15, change_pct=11.07),),
+        sectors=(SectorPulse(sector="Technology", median_change_pct=-2.1, n=312),),
+    )
+    run_id = _begin(con)
+    _write(con, run_id)
+    writer.write_market_wire(con, run_id=run_id, wire=wire)
+    writer.write_market_wire(con, run_id=run_id, wire=wire)  # idempotent re-entry
+    writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
+    report = queries.run_report(con, run_id)
+    assert report.market == wire
+
+
+def test_quiet_pulse_has_no_market_wire(con):
+    run_id = _begin(con)
+    _write(con, run_id)
+    writer.finish_run(con, run_id=run_id, status="complete", finished_at=T1)
+    assert queries.run_report(con, run_id).market is None
+
+
 # --- events + run_report ------------------------------------------------------
 
 

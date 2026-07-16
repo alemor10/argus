@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -102,6 +102,13 @@ CREATE TABLE IF NOT EXISTS earnings_results (
 ) WITHOUT ROWID"""
         ),
     ),
+    # v1.9: the magazine's market wire — one claims JSON blob per watch run.
+    7: """
+CREATE TABLE IF NOT EXISTS market_wire (
+    run_id  INTEGER PRIMARY KEY REFERENCES runs(run_id),
+    payload TEXT    NOT NULL
+) WITHOUT ROWID;
+""",
 }
 
 

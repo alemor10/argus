@@ -24,6 +24,7 @@ from argus.models import (
     MacroLineCrossed,
     MacroPrint,
     MacroShift,
+    MarketWire,
     PriceMove,
     QuarantineHit,
     RunReport,
@@ -103,6 +104,13 @@ def render(report: RunReport) -> str:
             parts.append(_macro_section(macro))
         # Changes reads equities first, then macro — both alphabetical.
         parts.append(_changes_section(watch + macro))
+        if report.market is not None:  # the issue's market pages (magazine mode)
+            parts += [
+                _movers_section(report.market),
+                _sector_pulse_section(report.market),
+                _earnings_wire_section(report.market),
+                _extremes_section(report.market),
+            ]
         parts.append(_watchlist_section(watch))
         if report.bellwethers:
             parts.append(_bellwether_section(report))
@@ -476,6 +484,103 @@ def _thesis_standing(ticker: TickerReport) -> str:
     if unverifiable:
         summary += f" ({unverifiable} unverifiable this run)"
     return f"_{summary}_"
+
+
+# --- The market wire (magazine issues) ----------------------------------------
+# All four sections are claims-labeled market context from one scan + one
+# calendar call, curated by the mechanical rules in market.py — never a
+# delivery trigger, never observations.
+
+
+def _movers_section(wire: "MarketWire") -> list[str]:
+    from argus.market import MOVER_CAP_FLOOR, MOVERS_SHOWN
+
+    lines = ["## Market movers (tradingview, unverified)", ""]
+    if not wire.gainers and not wire.losers:
+        lines.append("No large-cap gainers or losers last session — a flat tape is information.")
+        return lines
+    for title, movers in (("Gainers:", wire.gainers), ("Losers:", wire.losers)):
+        if not movers:
+            continue
+        lines.append(title)
+        for m in movers:
+            name = f" — {m.company}" if m.company else ""
+            lines.append(f"- {m.symbol} {m.change_pct:+.1f}% → {m.close:.2f}{name} ({m.sector})")
+        lines.append("")
+    lines.append(
+        f"_Top {MOVERS_SHOWN} each way, last session, caps ≥ "
+        f"${MOVER_CAP_FLOOR / 1e9:.0f}B ({wire.universe} names scanned)._"
+    )
+    return lines
+
+
+def _sector_pulse_section(wire: "MarketWire") -> list[str]:
+    lines = ["## Sector pulse (tradingview, unverified)", ""]
+    if not wire.sectors:
+        lines.append("No sector data in the scan this issue.")
+        return lines
+    lines += [
+        f"- {p.sector}: {p.median_change_pct:+.1f}% median ({p.n} names)" for p in wire.sectors
+    ]
+    return lines
+
+
+def _earnings_wire_section(wire: "MarketWire") -> list[str]:
+    from argus.market import MOVER_CAP_FLOOR
+
+    lines = ["## Earnings wire (finnhub + tradingview, unverified)", ""]
+    if not wire.earnings_reported and not wire.earnings_upcoming:
+        lines.append("No large-cap earnings reported or scheduled in the window.")
+        return lines
+    if wire.earnings_reported:
+        lines.append("Reported:")
+        for b in wire.earnings_reported:
+            line = f"- {b.symbol} ({b.report_date.isoformat()}): EPS {b.eps_actual:.2f}"
+            if b.eps_estimate is not None:
+                line += f" vs {b.eps_estimate:.2f} est"
+                if b.eps_estimate != 0:
+                    surprise = (b.eps_actual - b.eps_estimate) / abs(b.eps_estimate) * 100
+                    line += f" ({surprise:+.1f}%)"
+            lines.append(line)
+        lines.append("")
+    if wire.earnings_upcoming:
+        lines.append("Upcoming:")
+        for b in wire.earnings_upcoming:
+            when = b.report_date.isoformat() + (f" {b.hour}" if b.hour else "")
+            line = f"- {b.symbol} — {when}"
+            if b.eps_estimate is not None:
+                line += f" (est {b.eps_estimate:.2f})"
+            lines.append(line)
+        if wire.earnings_more_upcoming:
+            lines.append(f"- … and {wire.earnings_more_upcoming} more large caps this week.")
+        lines.append("")
+    lines.append(
+        f"_Caps ≥ ${MOVER_CAP_FLOOR / 1e9:.0f}B plus your pinned bellwethers; surprise "
+        "computed from the two claimed numbers. Never a delivery trigger._"
+    )
+    return lines
+
+
+def _extremes_section(wire: "MarketWire") -> list[str]:
+    from argus.market import EXTREME_TOLERANCE, MOVER_CAP_FLOOR
+
+    lines = ["## New 52-week extremes (tradingview, unverified)", ""]
+    if not wire.highs and not wire.lows:
+        lines.append("No large caps at 52-week marks last session.")
+        return lines
+    for title, extremes in (("At highs:", wire.highs), ("At lows:", wire.lows)):
+        if not extremes:
+            continue
+        lines.append(title)
+        for e in extremes:
+            name = f" — {e.company}" if e.company else ""
+            lines.append(f"- {e.symbol} {e.close:.2f}{name}")
+        lines.append("")
+    lines.append(
+        f"_Within {EXTREME_TOLERANCE:.1%} of the 52-week mark, caps ≥ "
+        f"${MOVER_CAP_FLOOR / 1e9:.0f}B._"
+    )
+    return lines
 
 
 def _bellwether_section(report: RunReport) -> list[str]:
