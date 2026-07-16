@@ -377,8 +377,6 @@ class TestMacroSection:
 
 class TestBellwetherSection:
     def _report_with(self, *bellwethers):
-        from argus.models import BellwetherEarning  # local: only this class uses it
-
         return RunReport(
             run_id=7, kind="watch", as_of=NOW, status="complete",
             tickers=(_quiet_ticker(),), bellwethers=tuple(bellwethers),
@@ -422,10 +420,26 @@ class TestEtfRebalanceSection:
             ),
         )
         out = render(report)
-        assert "## ETF rebalancing (ssga, unverified)" in out
+        assert "## ETF rebalancing (holdings, unverified)" in out
         assert "- SPY added: NEWCO" in out
         assert "- SPY dropped: OLDCO, GONE" in out
         assert "- XLK added: CHIPCO" in out
+        assert "· SEC N-PORT" not in out  # issuer-fed funds carry no per-line lag tag
+
+    def test_nport_fund_rebalance_discloses_lag(self):
+        from argus.models import EtfRebalance
+
+        report = RunReport(
+            run_id=7, kind="watch", as_of=NOW, status="complete",
+            tickers=(_quiet_ticker(),),
+            etf_rebalances=(
+                EtfRebalance(etf="SCHD", added=("Cisco Systems Inc",), dropped=("FMC Corp",)),
+            ),
+        )
+        out = render(report)
+        # N-PORT names the change by company and discloses the filing lag.
+        assert "- SCHD added: Cisco Systems Inc · SEC N-PORT, latest filing (lagged)" in out
+        assert "- SCHD dropped: FMC Corp · SEC N-PORT, latest filing (lagged)" in out
 
     def test_no_rebalance_no_section(self):
         out = render(_report([_quiet_ticker()]))

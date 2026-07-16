@@ -379,12 +379,13 @@ def _market_wire_step(bellwethers: tuple[str, ...], deliver: "DeliverPolicy"):
     return step
 
 
-def _etf_step(etfs: tuple[str, ...]):
+def _etf_step(etfs: tuple[str, ...], contact_email: str | None = None):
     """before_digest hook on EVERY watch run (not just magazine ones — a
     rebalance should page even a quiet events-only Monday). Snapshots each
     ETF's membership and stores it ONLY when it changed since the last
     snapshot; the rebalance is then the diff (computed at report time).
-    Per-ETF failures append a run note; the digest must always land."""
+    Per-ETF failures append a run note; the digest must always land.
+    `contact_email` unlocks the N-PORT-served funds (SCHD, iShares)."""
     from argus.store import queries, writer
 
     if not etfs:
@@ -395,8 +396,8 @@ def _etf_step(etfs: tuple[str, ...]):
 
         for etf in etfs:
             symbol = etf.strip().upper()
-            source = holdings_source_for(symbol)
-            if source is None:  # no issuer feed for this ticker — disclosed, not guessed
+            source = holdings_source_for(symbol, contact_email)
+            if source is None:  # no feed for this ticker — disclosed, not guessed
                 writer.append_run_note(
                     con, run_id=run_id, note=f"no holdings feed for {symbol} (unsupported issuer)"
                 )
@@ -570,7 +571,7 @@ def watch(
             gated_sink=gated_sink,
             before_digest=_compose_before_digest(
                 _market_wire_step(macro_config.bellwethers, deliver),
-                _etf_step(macro_config.etfs),
+                _etf_step(macro_config.etfs, resolve_secrets().edgar_contact_email),
                 _insider_radar_step(),
             ),
         )

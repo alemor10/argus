@@ -665,7 +665,7 @@ def _watch_news(fig: Figure, cur: _Cursor, report: RunReport, history: History) 
     if radar_lines:
         _block(cur, "Radar", radar_lines, 22)
     if report.etf_rebalances:
-        _block(cur, "ETF rebalancing (ssga, unverified)", _etf_rebalance_pdf_lines(report), 16)
+        _block(cur, "ETF rebalancing (holdings, unverified)", _etf_rebalance_pdf_lines(report), 16)
     bellwether_lines = _bellwether_pdf_lines(report)
     if bellwether_lines:
         _block(cur, "Bellwether earnings (finnhub, unverified)", bellwether_lines,
@@ -905,12 +905,15 @@ def _movers_chart(fig: Figure, cur: _Cursor, wire) -> None:
 def _etf_rebalance_pdf_lines(report: RunReport) -> list[tuple[str, str]]:
     """Constituent adds (green) / drops (red) per changed ETF — forced-flow
     signal, claims-labeled."""
+    from argus.etf import is_nport_etf
+
     lines: list[tuple[str, str]] = []
     for r in report.etf_rebalances:
+        tag = " · N-PORT (lagged)" if is_nport_etf(r.etf) else ""
         if r.added:
-            lines.append((_clip(f"{r.etf} added: {', '.join(r.added)}", 118), _UP))
+            lines.append((_clip(f"{r.etf} added: {', '.join(r.added)}{tag}", 118), _UP))
         if r.dropped:
-            lines.append((_clip(f"{r.etf} dropped: {', '.join(r.dropped)}", 118), _CRITICAL))
+            lines.append((_clip(f"{r.etf} dropped: {', '.join(r.dropped)}{tag}", 118), _CRITICAL))
     return lines
 
 

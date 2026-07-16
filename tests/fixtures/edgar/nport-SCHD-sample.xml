@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<edgarSubmission xmlns="http://www.sec.gov/edgar/nport" xmlns:com="http://www.sec.gov/edgar/common">
+  <formData>
+    <genInfo>
+      <regName>Schwab Strategic Trust</regName>
+      <seriesName>Schwab U.S. Dividend Equity ETF</seriesName>
+      <repPdDate>2026-05-31</repPdDate>
+    </genInfo>
+    <invstOrSecs>
+      <invstOrSec>
+        <name>Cisco Systems Inc</name>
+        <title>Cisco Systems Inc</title>
+        <cusip>17275R102</cusip>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>123456789.00</valUSD>
+        <pctVal>3.576002271836</pctVal>
+      </invstOrSec>
+      <invstOrSec>
+        <name>FMC Corp</name>
+        <title>FMC Corp</title>
+        <cusip>302491303</cusip>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>2345678.00</valUSD>
+        <pctVal>0.066076737132</pctVal>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Nexstar Media Group Inc</name>
+        <title>Nexstar Media Group Inc</title>
+        <cusip>65336K103</cusip>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>9876543.00</valUSD>
+        <pctVal>0.257208836457</pctVal>
+      </invstOrSec>
+      <invstOrSec>
+        <name>Net Other Assets (Liabilities)</name>
+        <title>Net Other Assets</title>
+        <cusip>N/A</cusip>
+        <units>NS</units>
+        <curCd>USD</curCd>
+        <valUSD>1000.00</valUSD>
+        <pctVal>0.001</pctVal>
+      </invstOrSec>
+    </invstOrSecs>
+  </formData>
+</edgarSubmission>

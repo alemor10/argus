@@ -734,15 +734,31 @@ class MarketWire(BaseModel):
 
 
 class EtfHolding(BaseModel):
-    """One constituent of a watched ETF — the issuer's daily-holdings claim
-    (ticker + weight), never gated. Persisted as a membership snapshot so
-    rebalances (adds/drops) are a diff of two snapshots."""
+    """One constituent of a watched ETF — the source's holdings claim, never
+    gated. Persisted as a membership snapshot so rebalances (adds/drops) are a
+    diff of two snapshots. Issuer feeds (SSGA/Vanguard) give a ticker; SEC
+    N-PORT gives a CUSIP + company name and no ticker, so identity and display
+    are split: diff on `key`, render `label`."""
 
     model_config = ConfigDict(frozen=True)
 
-    ticker: str
-    weight: float = 0.0  # percent, as the issuer reports
+    ticker: str | None = None
+    cusip: str | None = None
+    weight: float = 0.0  # percent, as the source reports
     name: str | None = None
+
+    @property
+    def key(self) -> str:
+        """Membership identity for the rebalance diff — the ticker where the
+        source gives one, else the CUSIP (N-PORT), else the name. Stable across
+        snapshots of the same source so adds/drops are real, not artifacts."""
+        return self.ticker or self.cusip or self.name or ""
+
+    @property
+    def label(self) -> str:
+        """How a changed constituent reads in the digest — the ticker when
+        known, else the company name (N-PORT carries no ticker), else CUSIP."""
+        return self.ticker or self.name or self.cusip or "?"
 
 
 class EtfRebalance(BaseModel):

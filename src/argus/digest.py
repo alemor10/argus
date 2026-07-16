@@ -589,15 +589,19 @@ def _etf_rebalance_section(report: RunReport) -> list[str]:
     """Well-known ETFs whose constituents changed since the last snapshot — a
     forced-flow signal (an index add means index funds must buy). Shown only
     when something changed; a quiet run stores and says nothing."""
-    lines = ["## ETF rebalancing (ssga, unverified)", ""]
+    from argus.etf import is_nport_etf
+
+    lines = ["## ETF rebalancing (holdings, unverified)", ""]
     for r in report.etf_rebalances:
+        tag = " · SEC N-PORT, latest filing (lagged)" if is_nport_etf(r.etf) else ""
         if r.added:
-            lines.append(f"- {r.etf} added: {', '.join(r.added)}")
+            lines.append(f"- {r.etf} added: {', '.join(r.added)}{tag}")
         if r.dropped:
-            lines.append(f"- {r.etf} dropped: {', '.join(r.dropped)}")
+            lines.append(f"- {r.etf} dropped: {', '.join(r.dropped)}{tag}")
     lines.append(
-        "_Constituent changes in each issuer's daily holdings — a claims-labeled "
-        "diff, never gated. An index add is forced buying; a drop the reverse._"
+        "_Constituent changes in each source's holdings — a claims-labeled diff, "
+        "never gated. An index add is forced buying; a drop the reverse. Issuer "
+        "feeds are same-day; N-PORT reflects the latest monthly SEC filing._"
     )
     return lines
 

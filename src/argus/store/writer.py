@@ -347,7 +347,9 @@ def write_etf_holdings(
     """Persist one ETF's membership snapshot for this run — the caller writes
     only when membership changed, so the diff against the prior blob IS the
     rebalance. OR REPLACE keeps a retried step idempotent."""
-    payload = json.dumps([{"t": h.ticker, "w": h.weight, "n": h.name} for h in holdings])
+    payload = json.dumps(
+        [{"t": h.ticker, "c": h.cusip, "w": h.weight, "n": h.name} for h in holdings]
+    )
     with con:
         con.execute(
             "INSERT OR REPLACE INTO etf_holdings (run_id, etf, holdings) VALUES (?, ?, ?)",

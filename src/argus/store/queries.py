@@ -414,7 +414,9 @@ def _etf_rebalances(con: sqlite3.Connection, run_id: int) -> tuple[EtfRebalance,
 
 def _hydrate_holdings(blob: str) -> list[EtfHolding]:
     return [
-        EtfHolding(ticker=d["t"], weight=d.get("w", 0.0), name=d.get("n"))
+        EtfHolding(
+            ticker=d.get("t"), cusip=d.get("c"), weight=d.get("w", 0.0), name=d.get("n")
+        )
         for d in json.loads(blob)
     ]
 

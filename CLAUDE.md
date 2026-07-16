@@ -102,13 +102,21 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       [0.3,3]×price, the NTDOY rule applied to claims; analyst count), a
       sentence-trimmed summary, and a 1-year price strip (ungated, captioned).
 - [x] ETF rebalancing (v1.14, 2026-07-16): watch well-known ETFs (SPY, DIA,
-      the 11 sector SPDRs) via the SSGA daily-holdings feed; report constituent
-      adds/drops when membership changes (forced-flow signal — an index add
-      means index funds must buy). Change-log storage (blob only on change),
-      reproducible diff, claims-labeled, feeds the delivery gate. Tickers come
-      directly from the feed, so the CUSIP→ticker join that made N-PORT the
-      "hardest data-eng piece" is skipped. iShares/Vanguard/N-PORT slot in
-      behind the HoldingsSource protocol later. See ARCHITECTURE.md, ETF
+      the 11 sector SPDRs, Vanguard VOO/VTI/VYM/VUG) via issuer daily-holdings
+      feeds; report constituent adds/drops when membership changes (forced-flow
+      signal — an index add means index funds must buy). Change-log storage
+      (blob only on change), reproducible diff, claims-labeled, feeds the
+      delivery gate. Issuer feeds give tickers directly. See ARCHITECTURE.md,
+      ETF rebalancing.
+- [x] N-PORT holdings source (v1.16, 2026-07-16): funds whose issuer blocks
+      headless requests (Schwab's SCHD, iShares core) are served from the
+      official SEC N-PORT filing instead. Lagged (~monthly) and CUSIP-keyed
+      with no ticker — but rebalance detection needs only a stable identity
+      (CUSIP) + a display name (company), never a ticker, so the CUSIP→ticker
+      join that made N-PORT "the hardest data-eng piece" is sidestepped, not
+      solved. `EtfHolding` splits `key` (ticker→CUSIP) from `label`
+      (ticker→name); the lag is disclosed on the rebalance line. Needs a SEC
+      contact email. SCHD is now followable. See ARCHITECTURE.md, ETF
       rebalancing.
 - [x] Insider buys (v1.15, 2026-07-16): Form 4 open-market purchases (code P)
       by officers/directors on watchlist + consider names AND the scout shortlist (Radar crossing) — realized filed

@@ -592,6 +592,7 @@ the point.
 | FRED via keyless fredgraph.csv; transforms computed in the adapter | Keyed official API now; raw index levels reported | Zero-setup matches the free-first posture (eyes-open unofficial, one-module blast radius, keyed API documented as the upgrade); YoY/MoM from two points of the same official series is the EDGAR-ratio precedent, and "CPI YoY 3.5%" is the number a human actually watches. |
 | Bellwether earnings are claims-only and never open the delivery gate | Gate on megacap reports; verify through the v1 stack | In season bellwethers report near-daily — gating on them turns events-only back into posting-daily; verifying ten non-held names through the fetch→gate stack costs the rate budget the watchlist needs. Context, labeled as such. |
 | PDF is the delivered artifact; markdown stays the canonical record | Markdown-first with PDF companion (v1.2–v1.7); PDF-only everywhere | The reader wants one complete document — so the PDF gained full digest parity and Discord/email attach it (md only as the no-PDF fallback, never silence). But byte-for-byte regeneration, golden byte-compares, and the Discord headline extraction are text properties; a PDF is deterministic only within a matplotlib version. The record and the rendering are different jobs. |
+| N-PORT for issuer-blocked ETFs; diff on CUSIP, name by company | Leave SCHD unsupported; solve CUSIP→ticker via OpenFIGI; scrape an aggregator | Schwab and Nasdaq block headless and stockanalysis returns only a page-summary — but SCHD is a fund worth following. SEC N-PORT is official and never bot-blocked. The join everyone dreads is only needed for aggregate *look-through*; a *rebalance* needs a stable identity + a display name, both of which N-PORT carries (CUSIP + company). So `EtfHolding` split `key`/`label` and the join is sidestepped, not solved. Cost accepted: the filing is lagged (~monthly) — disclosed on the line, and fine for annually-reconstituted funds like SCHD. |
 
 ## Scout (discovery) — v1.1
 
@@ -866,10 +867,22 @@ means index funds MUST buy), and it works whether or not you hold the ETF.
 `etf.py` fetches a configured set of ETFs' membership behind a
 `HoldingsSource` protocol, routed per fund by `holdings_source_for`: SPDR
 funds via the SSGA daily-holdings xlsx (SPY, DIA, sector XL*, SDY, MDY),
-Vanguard funds via the investor.vanguard.com JSON (VOO, VTI, VYM, VUG). Both
-give tickers directly, so the CUSIP→ticker join that made N-PORT "the
-hardest data-eng piece" is skipped. (Schwab blocks headless, so SCHD is not
-routable — an unsupported ticker is skipped with a disclosed note.)
+Vanguard funds via the investor.vanguard.com JSON (VOO, VTI, VYM, VUG) — both
+give tickers directly — and funds whose issuer blocks headless requests
+(Schwab's SCHD, the iShares core funds) via **SEC N-PORT** (v1.16). N-PORT is
+official and never bot-blocked but ~monthly and lagged, and carries a CUSIP +
+company name with no ticker. The insight that made it cheap: rebalance
+detection needs only a *stable identity* plus a *display name*, not a ticker —
+so `EtfHolding` splits `key` (ticker, else CUSIP) from `label` (ticker, else
+company name); `membership_diff` keys on `key` and reports `label`. The
+CUSIP→ticker join that made N-PORT "the hardest data-eng piece" is sidestepped
+entirely, not solved. `NportHoldingsSource` resolves the fund ticker to its
+SEC series via `company_tickers_mf.json`, pulls that series' latest NPORT-P,
+and parses `invstOrSec` rows (name/cusip/pctVal); it needs a SEC contact email
+(User-Agent), so without one an N-PORT fund reads as unserved. The lag is
+disclosed on the rebalance line ("SEC N-PORT, latest filing (lagged)") —
+fine for annually-reconstituted funds like SCHD (Dow Jones US Dividend 100,
+rebalanced each March). An ETF matched by no source is skipped with a note.
 
 Storage is a change-log, not a daily dump: a holdings blob is persisted only
 when membership changed since the last snapshot (schema v10, `etf_holdings`;
