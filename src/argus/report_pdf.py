@@ -52,6 +52,7 @@ from argus.digest import (
     # different stories about the same run, so the PDF reuses them verbatim
     # (markdown chrome stripped at the call sites).
     _considering_line as _digest_considering_line,
+    _feature_fact_lines as _digest_feature_fact_lines,
     _event_line as _digest_event_line,
     _macro_line as _digest_macro_line,
     _radar_crossings as _digest_radar_crossings,
@@ -214,7 +215,7 @@ def build_pdf(
             if report.market is not None:
                 _save(pdf, _market_wire_page(report))
                 if report.market.features:
-                    _save(pdf, _featured_page(report))
+                    _save(pdf, _featured_page(report, history))
             _save(pdf, _watch_status_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
@@ -993,9 +994,10 @@ def _extremes_pdf_lines(wire) -> list[tuple[str, str]]:
     return lines
 
 
-def _featured_page(report: RunReport) -> Figure:
+def _featured_page(report: RunReport, history: History) -> Figure:
     """Worth reading about: the featured cards — who the companies are, why
-    they surfaced (mechanical rules), and their claimed numbers."""
+    they surfaced (mechanical rules), their claimed numbers, and a 1-year
+    price strip (raw history, ungated — captioned as such)."""
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
     cur.line("Worth reading about", size=13, weight="bold")
@@ -1009,29 +1011,35 @@ def _featured_page(report: RunReport) -> Figure:
     wire = report.market
     assert wire is not None
     for card in wire.features:
-        if cur.y < _PAGE_FLOOR + 0.10:
+        if cur.y < _PAGE_FLOOR + 0.12:
             break
         title = card.symbol + (f" — {card.name}" if card.name else "")
         cur.line(_clip(title, 90), size=11.5, weight="bold")
         cur.gap(0.002)
         cur.line(card.why + ".", size=8.5, color=_SECONDARY, style="italic")
-        facts = []
-        if card.sector:
-            facts.append(card.sector + (f" · {card.industry}" if card.industry else ""))
-        if card.market_cap:
-            facts.append(f"cap {_humanize_cap(card.market_cap)}")
-        if card.close is not None:
-            facts.append(f"close {card.close:,.2f}")
-        if card.fwd_pe:
-            facts.append(f"fwd P/E {card.fwd_pe:.1f}")
-        if card.employees:
-            facts.append(f"{card.employees:,} employees")
-        if facts:
-            cur.line("  ·  ".join(facts), size=8.5, color=_INK)
+        fact_lines = _digest_feature_fact_lines(card)
+        for fact_line in fact_lines:
+            tone = _SECONDARY if fact_line.startswith("street:") else _INK
+            cur.line(_clip(fact_line, 120), size=8.5, color=tone)
         if card.summary:
             cur.gap(0.004)
             cur.wrapped(card.summary, size=8.5, color=_SECONDARY, width=110, max_lines=7)
-        cur.gap(0.022)
+        points = history.get(card.symbol)
+        if points and len(points) >= 2:
+            chart_h = 0.045
+            ax = fig.add_axes((0.07, cur.y - chart_h, 0.86, chart_h))
+            ax.axis("off")
+            values = [p[1] for p in points]
+            ax.plot(range(len(values)), values, color=_SERIES, linewidth=0.9)
+            ax.plot([len(values) - 1], [values[-1]], "o", color=_SERIES, markersize=2)
+            ax.margins(x=0.01, y=0.2)
+            ax.annotate(
+                "1y — raw yahoo history, ungated",
+                xy=(0, 0), xycoords="axes fraction", xytext=(0, -9),
+                textcoords="offset points", fontsize=6, color=_MUTED,
+            )
+            cur.gap(chart_h + 0.016)
+        cur.gap(0.018)
     _page_footer(fig, report)
     return fig
 

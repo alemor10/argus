@@ -303,8 +303,17 @@ def _pdf_artifact_builder():
                 for t in report.tickers
                 if t.context.macro is not None and t.context.macro.source is Source.YAHOO
             ]
+        featured = [
+            card.symbol
+            for card in (report.market.features if report.market is not None else ())
+        ]
         history = {ticker: fetch_history(ticker) for ticker in tickers}
         history |= {symbol: fetch_history(symbol, period="1mo") for symbol in macro_market}
+        history |= {
+            symbol: fetch_history(symbol)
+            for symbol in featured
+            if symbol not in history
+        }
         revenue_series = {ticker: fetch_annual_revenue(ticker) for ticker in tickers}
         filename = (
             f"argus-{report.kind}-{report.as_of.date().isoformat()}-run{report.run_id}.pdf"

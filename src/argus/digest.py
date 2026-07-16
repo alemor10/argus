@@ -683,21 +683,64 @@ def _featured_section(wire: MarketWire) -> list[str]:
         title = f"### {card.symbol}" + (f" — {card.name}" if card.name else "")
         lines += [title, ""]
         lines.append(f"_{card.why}._")
-        facts = []
-        if card.sector:
-            facts.append(card.sector + (f" · {card.industry}" if card.industry else ""))
-        if card.market_cap:
-            facts.append(f"cap {_humanize_cap(card.market_cap)}")
-        if card.fwd_pe:
-            facts.append(f"fwd P/E {card.fwd_pe:.1f}")
-        if card.employees:
-            facts.append(f"{card.employees:,} employees")
-        if facts:
-            lines += ["", "- " + " · ".join(facts)]
+        for fact_line in _feature_fact_lines(card):
+            lines.append("- " + fact_line)
         if card.summary:
             lines += ["", card.summary]
         lines.append("")
     lines.append("_Selection is mechanical (top mover each way, largest upcoming reporter)._")
+    return lines
+
+
+def _feature_fact_lines(card) -> list[str]:
+    """Three claim rows per card: the business, the numbers, the street."""
+    lines: list[str] = []
+    business = []
+    if card.sector:
+        business.append(card.sector + (f" · {card.industry}" if card.industry else ""))
+    if card.market_cap:
+        business.append(f"cap {_humanize_cap(card.market_cap)}")
+    if card.employees:
+        business.append(f"{card.employees:,} employees")
+    if business:
+        lines.append(" · ".join(business))
+    valuation = []
+    if card.close is not None:
+        span = ""
+        if card.low_52w and card.high_52w:
+            span = f" (52w {card.low_52w:,.2f}–{card.high_52w:,.2f})"
+        valuation.append(f"close {card.close:,.2f}{span}")
+    if card.fwd_pe:
+        valuation.append(f"fwd P/E {card.fwd_pe:.1f}")
+    elif card.pe_ttm:
+        valuation.append(f"P/E {card.pe_ttm:.1f}")
+    if card.beta is not None:
+        valuation.append(f"beta {card.beta:.2f}")
+    if valuation:
+        lines.append(" · ".join(valuation))
+    quality = []
+    if card.revenue:
+        rev = f"revenue {_humanize_cap(card.revenue)}"
+        if card.revenue_growth_pct is not None:
+            rev += f" ({card.revenue_growth_pct:+.1f}% YoY)"
+        quality.append(rev)
+    if card.gross_margin_pct is not None:
+        quality.append(f"gross margin {card.gross_margin_pct:.1f}%")
+    if card.roe_pct is not None:
+        quality.append(f"ROE {card.roe_pct:.1f}%")
+    if card.dividend_yield_pct:
+        quality.append(f"yield {card.dividend_yield_pct:.2f}%")
+    if quality:
+        lines.append(" · ".join(quality))
+    street = []
+    if card.analyst_rating:
+        street.append(f"consensus {card.analyst_rating}")
+    if card.analyst_target:
+        street.append(f"mean target {card.analyst_target:,.2f}")
+    if card.analyst_count:
+        street.append(f"{card.analyst_count} analysts")
+    if street:
+        lines.append("street: " + " · ".join(street))
     return lines
 
 

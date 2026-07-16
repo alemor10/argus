@@ -328,6 +328,8 @@ def fetch_feature_card(symbol: str, why: str, rows_by_symbol: Mapping[str, Marke
         close=row.close if row else None,
         change_pct=row.change_pct if row else None,
         market_cap=row.market_cap if row else None,
+        high_52w=row.high_52w if row else None,
+        low_52w=row.low_52w if row else None,
     )
     try:
         import yfinance
@@ -340,17 +342,57 @@ def fetch_feature_card(symbol: str, why: str, rows_by_symbol: Mapping[str, Marke
         raw = info.get(key)
         return raw if isinstance(raw, str) and raw.strip() else None
 
+    def pct(key: str, scale: float = 100.0) -> float | None:
+        raw = _num(info.get(key))
+        return raw * scale if raw is not None else None
+
     employees = info.get("fullTimeEmployees")
+    close = card.close if card.close is not None else _num(info.get("currentPrice"))
+    target = _num(info.get("targetMeanPrice"))
+    # The founding NTDOY rail, applied at claim time: a target wildly outside
+    # the price is a stale/mismatched figure — never print it (and never
+    # print computed "upside" anywhere; the reader gets two labeled facts).
+    if target is not None and close:
+        if not (0.3 <= target / close <= 3.0):
+            target = None
+    count = info.get("numberOfAnalystOpinions")
     return card.model_copy(
         update={
             "name": text("longName") or text("shortName") or card.name,
             "sector": text("sector") or card.sector,
             "industry": text("industry"),
             "employees": employees if isinstance(employees, int) and employees > 0 else None,
-            "summary": (text("longBusinessSummary") or "")[:900] or None,
+            "summary": _trim_sentences(text("longBusinessSummary"), 700),
             "fwd_pe": _num(info.get("forwardPE")),
+            "pe_ttm": _num(info.get("trailingPE")),
+            "revenue": _num(info.get("totalRevenue")),
+            "revenue_growth_pct": pct("revenueGrowth"),
+            "gross_margin_pct": pct("grossMargins"),
+            "operating_margin_pct": pct("operatingMargins"),
+            "roe_pct": pct("returnOnEquity"),
+            "dividend_yield_pct": _num(info.get("dividendYield")),  # yahoo reports percent
+            "beta": _num(info.get("beta")),
+            "high_52w": _num(info.get("fiftyTwoWeekHigh")) or card.high_52w,
+            "low_52w": _num(info.get("fiftyTwoWeekLow")) or card.low_52w,
+            "analyst_rating": text("recommendationKey"),
+            "analyst_target": target,
+            "analyst_count": count if isinstance(count, int) and count > 0 else None,
         }
     )
+
+
+def _trim_sentences(raw: str | None, limit: int) -> str | None:
+    """Cut at the last sentence boundary inside the limit — a card that ends
+    mid-clause reads like a glitch, not an excerpt."""
+    if not raw:
+        return None
+    if len(raw) <= limit:
+        return raw
+    clipped = raw[:limit]
+    cut = clipped.rfind(". ")
+    if cut > limit // 2:
+        return clipped[: cut + 1]
+    return clipped.rsplit(" ", 1)[0] + " …"
 
 
 def _abs_surprise(entry: EarningsWireEntry) -> float:

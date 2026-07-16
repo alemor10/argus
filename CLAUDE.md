@@ -96,6 +96,11 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       numbers — picked by disclosed mechanical rules (top mover each way,
       largest upcoming reporter). Claims-labeled; prose verbatim; ~3 extra
       fetches per issue; persisted in the wire blob.
+- [x] Rich feature cards (v1.13, 2026-07-16): each card now carries the 52w
+      range, valuation (fwd P/E, beta), quality (revenue+growth, margins, ROE,
+      yield), the street's view (consensus, mean target — render-railed to
+      [0.3,3]×price, the NTDOY rule applied to claims; analyst count), a
+      sentence-trimmed summary, and a 1-year price strip (ungated, captioned).
 - [ ] ETF look-through concentration: resolve constituents → true aggregate
       single-name / theme exposure. Hardest data-engineering piece (joins, not cost).
 

@@ -663,6 +663,19 @@ class FeatureCard(BaseModel):
     change_pct: float | None = None
     market_cap: float | None = None
     fwd_pe: float | None = None
+    pe_ttm: float | None = None
+    revenue: float | None = None  # TTM, dollars
+    revenue_growth_pct: float | None = None
+    gross_margin_pct: float | None = None
+    operating_margin_pct: float | None = None
+    roe_pct: float | None = None
+    dividend_yield_pct: float | None = None
+    beta: float | None = None
+    high_52w: float | None = None
+    low_52w: float | None = None
+    analyst_rating: str | None = None
+    analyst_target: float | None = None  # shown only inside the sanity rail vs price
+    analyst_count: int | None = None
 
 
 class MarketWire(BaseModel):

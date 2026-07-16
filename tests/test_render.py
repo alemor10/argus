@@ -506,7 +506,8 @@ class TestFeaturedSection:
         out = render(report)
         assert "### ABT — Abbott Laboratories" in out
         assert "_Yesterday's biggest large-cap gainer: +11.3% to 98.79._" in out
-        assert "- Healthcare · Medical Devices · cap 170.0B · fwd P/E 22.4 · 114,000 employees" in out
+        assert "- Healthcare · Medical Devices · cap 170.0B · 114,000 employees" in out
+        assert "- fwd P/E 22.4" in out
         assert "Abbott Laboratories discovers" in out
         assert "Selection is mechanical" in out
 
