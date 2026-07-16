@@ -749,12 +749,49 @@ def _stat_tile(
                  color=caption[1])
     points = history.get(ticker.context.ticker)
     if points and len(points) >= 2 and spec.source != Source.FRED:
-        ax = fig.add_axes((x, y - 0.075, width, 0.024))
-        ax.axis("off")
-        values = [p[1] for p in points]
-        ax.plot(range(len(values)), values, color=_SERIES, linewidth=0.9)
-        ax.plot([len(values) - 1], [values[-1]], "o", color=_SERIES, markersize=1.8)
-        ax.margins(x=0.02, y=0.15)
+        _price_strip(fig, points, x=x, y=y - 0.075, width=width, height=0.024)
+
+
+def _price_strip(
+    fig: Figure,
+    points,
+    *,
+    x: float,
+    y: float,
+    width: float,
+    height: float,
+    labels: bool = False,
+) -> None:
+    """A single-series time strip per the house chart specs: thin line in the
+    series hue, subtle area fill, and — when `labels` — selective context in
+    text tokens (start/end values, min/max at their points), never a label
+    per point and never text in the series color."""
+    values = [p[1] for p in points]
+    if len(values) < 2:
+        return
+    ax = fig.add_axes((x, y, width, height))
+    ax.axis("off")
+    xs = range(len(values))
+    floor = min(values)
+    ax.fill_between(xs, values, floor, color=_SERIES, alpha=0.10, linewidth=0)
+    ax.plot(xs, values, color=_SERIES, linewidth=1.0)
+    ax.plot([len(values) - 1], [values[-1]], "o", color=_SERIES, markersize=2)
+    ax.margins(x=0.015, y=0.18)
+    if not labels:
+        return
+    lo_i = min(xs, key=lambda i: values[i])
+    hi_i = max(xs, key=lambda i: values[i])
+    ax.annotate(f"{values[0]:,.2f}", xy=(0, values[0]), xytext=(-2, 8),
+                textcoords="offset points", ha="left", fontsize=6, color=_SECONDARY)
+    ax.annotate(f"{values[-1]:,.2f}", xy=(len(values) - 1, values[-1]), xytext=(2, 6),
+                textcoords="offset points", ha="right", fontsize=6.5,
+                fontweight="bold", color=_INK)
+    if hi_i not in (0, len(values) - 1):
+        ax.annotate(f"{values[hi_i]:,.2f}", xy=(hi_i, values[hi_i]), xytext=(0, 4),
+                    textcoords="offset points", ha="center", fontsize=5.5, color=_MUTED)
+    if lo_i not in (0, len(values) - 1):
+        ax.annotate(f"{values[lo_i]:,.2f}", xy=(lo_i, values[lo_i]), xytext=(0, -9),
+                    textcoords="offset points", ha="center", fontsize=5.5, color=_MUTED)
 
 
 def _tile_delta(ticker: TickerReport, fv, spec) -> float | None:
@@ -1011,7 +1048,7 @@ def _featured_page(report: RunReport, history: History) -> Figure:
     wire = report.market
     assert wire is not None
     for card in wire.features:
-        if cur.y < _PAGE_FLOOR + 0.12:
+        if cur.y < _PAGE_FLOOR + 0.26:  # a full card's height — no partial cards
             break
         title = card.symbol + (f" — {card.name}" if card.name else "")
         cur.line(_clip(title, 90), size=11.5, weight="bold")
@@ -1023,22 +1060,18 @@ def _featured_page(report: RunReport, history: History) -> Figure:
             cur.line(_clip(fact_line, 120), size=8.5, color=tone)
         if card.summary:
             cur.gap(0.004)
-            cur.wrapped(card.summary, size=8.5, color=_SECONDARY, width=110, max_lines=7)
+            cur.wrapped(card.summary, size=8.5, color=_SECONDARY, width=110, max_lines=5)
         points = history.get(card.symbol)
-        if points and len(points) >= 2:
-            chart_h = 0.045
-            ax = fig.add_axes((0.07, cur.y - chart_h, 0.86, chart_h))
-            ax.axis("off")
-            values = [p[1] for p in points]
-            ax.plot(range(len(values)), values, color=_SERIES, linewidth=0.9)
-            ax.plot([len(values) - 1], [values[-1]], "o", color=_SERIES, markersize=2)
-            ax.margins(x=0.01, y=0.2)
-            ax.annotate(
-                "1y — raw yahoo history, ungated",
-                xy=(0, 0), xycoords="axes fraction", xytext=(0, -9),
-                textcoords="offset points", fontsize=6, color=_MUTED,
+        if points and len(points) >= 2 and cur.y - 0.075 > _PAGE_FLOOR:
+            chart_h = 0.055
+            cur.gap(0.010)  # headroom for the max label
+            _price_strip(
+                fig, points, x=0.07, y=cur.y - chart_h, width=0.86, height=chart_h,
+                labels=True,
             )
-            cur.gap(chart_h + 0.016)
+            fig.text(0.07, cur.y - chart_h - 0.012, "1y — raw yahoo history, ungated",
+                     ha="left", va="top", fontsize=6, color=_MUTED)
+            cur.gap(chart_h + 0.020)
         cur.gap(0.018)
     _page_footer(fig, report)
     return fig
