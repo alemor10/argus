@@ -238,6 +238,62 @@ class TestYahooParse:
         assert YahooSource().covers("VOO")
 
 
+class TestYahooPriceFallback:
+    """`_fetch_raw` backfills the price from the chart endpoint (fast_info)
+    when quoteSummary (`.info`) sheds it — the real box failure where index/
+    futures/crypto macro symbols (^TNX, GC=F, BTC-USD) 404'd under load and
+    their levels vanished from the digest."""
+
+    @staticmethod
+    def _install(monkeypatch, *, info, fast_price):
+        import sys
+        import types
+
+        class _FastInfo:
+            def get(self, key, default=None):
+                return fast_price if key == "lastPrice" else default
+
+        class _Ticker:
+            def __init__(self, symbol):
+                self.info = dict(info)
+                self.fast_info = _FastInfo()
+                self.upgrades_downgrades = None
+                self.earnings_history = None
+                self.calendar = {}
+
+        module = types.ModuleType("yfinance")
+        module.Ticker = _Ticker
+        monkeypatch.setitem(sys.modules, "yfinance", module)
+
+    def test_fast_info_backfills_when_info_has_no_price(self, monkeypatch):
+        self._install(monkeypatch, info={"quoteType": "INDEX"}, fast_price=4.547)
+        result = YahooSource().fetch("^TNX")
+        [price] = [o for o in result.observations if o.field is Field.PRICE]
+        assert price.value_num == pytest.approx(4.547)
+        assert price.observed_at is None  # chart endpoint carries no timestamp
+        assert result.parse_failures == ()
+
+    def test_info_price_wins_and_fast_info_is_not_consulted(self, monkeypatch):
+        # regularMarketTime present → observed_at set; fast_price is a sentinel
+        # that must never surface if the primary path already has a price.
+        self._install(
+            monkeypatch,
+            info={"regularMarketPrice": 100.0, "regularMarketTime": 1_760_000_000},
+            fast_price=999.0,
+        )
+        result = YahooSource().fetch("AAPL")
+        [price] = [o for o in result.observations if o.field is Field.PRICE]
+        assert price.value_num == pytest.approx(100.0)
+        assert price.observed_at is not None
+
+    def test_no_price_anywhere_stays_absent_not_zero(self, monkeypatch):
+        # Both paths dry: the field is simply absent (an honest gap), never a
+        # fabricated 0 — absence of data stays distinguishable from a signal.
+        self._install(monkeypatch, info={"quoteType": "INDEX"}, fast_price=None)
+        result = YahooSource().fetch("^VIX")
+        assert not [o for o in result.observations if o.field is Field.PRICE]
+
+
 # --- Finnhub ----------------------------------------------------------------
 
 

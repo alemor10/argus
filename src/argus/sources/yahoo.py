@@ -82,6 +82,18 @@ class YahooSource:
 
         t = yfinance.Ticker(ticker)
         info = dict(t.info or {})
+        # Price resilience. `.info` is the quoteSummary endpoint, which 404s for
+        # non-equity symbols (indices/futures/crypto — ^TNX, GC=F, BTC-USD — have
+        # no fundamentals modules) and under load sheds the price entirely. The
+        # chart endpoint (`fast_info`) is a separate, lighter path: backfill the
+        # price from it when `.info` didn't carry one, so a macro level or a watch
+        # price survives a quoteSummary hiccup instead of the series going dark.
+        # Fallback-only — `.info`'s price carries regularMarketTime (observed_at)
+        # for the staleness gate and the Finnhub cross-check, which fast_info lacks.
+        if info.get("currentPrice") is None and info.get("regularMarketPrice") is None:
+            fallback_price = _fast_info_price(t)
+            if fallback_price is not None:
+                info["regularMarketPrice"] = fallback_price
         frame = t.upgrades_downgrades
         if frame is None or frame.empty:
             records = None
@@ -339,6 +351,26 @@ def _failure(field: Field, raw: Any, ticker: str, fetched_at: AwareDatetime) -> 
 def _subdict(payload: Any, key: str) -> dict[str, Any]:
     sub = payload.get(key) if isinstance(payload, dict) else None
     return sub if isinstance(sub, dict) else {}
+
+
+def _fast_info_price(t: Any) -> float | None:
+    """Last price off yfinance's `fast_info` (the chart endpoint) — the
+    fallback when quoteSummary (`.info`) drops the price. Best-effort by
+    contract: any failure, or a non-finite/non-positive value, just means no
+    fallback price, and the field stays absent (an honest gap, not a bad
+    number). No timestamp is available here, so parse() records observed_at
+    None — the staleness gate skips without evidence, per _epoch_to_utc."""
+    try:
+        raw = t.fast_info.get("lastPrice")
+    except Exception:  # fast_info can itself throttle/404 — no fallback then
+        return None
+    if isinstance(raw, bool):
+        return None
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if math.isfinite(value) and value > 0 else None
 
 
 def _epoch_to_utc(raw: Any) -> datetime | None:
