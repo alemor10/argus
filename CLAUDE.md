@@ -137,6 +137,19 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       growth" thesis made visual), and a **rank-trajectory sparkline** (screen
       rank across recent proposed weeks). Markdown digest unchanged except the
       callout; goldens hold. See ARCHITECTURE.md, PDF-first delivery.
+- [x] Sunday Edition, visual issue (v1.18, 2026-07-19): the weekly recap
+      became a two-page magazine issue instead of a plain text page —
+      masthead, a **macro scoreboard** (per-series tile: level + colored
+      week-over-week move + the week's sparkline, biggest proportional move
+      first), the week's events, then a discovery page (shortlist churn
+      coloured entered-green/dropped-red + the scorecard's per-name α-vs-SPY
+      bars) and the week ahead. Two data fixes: the macro Δ now falls back to
+      the week's first run when a series has no prior-week baseline (the
+      Jul-19 issue silently degraded to bare levels), carrying each run's
+      value in `RecapMacroLine.path` for the sparkline; and unchanged daily
+      macro re-prints (Fed-funds-effective, delta 0) roll into the suppressed
+      count instead of drowning the events section. See ARCHITECTURE.md, The
+      Sunday Edition.
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 

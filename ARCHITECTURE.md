@@ -923,6 +923,22 @@ DeliverPolicy.NEVER exists for exactly this), then the Edition posts at
 09:45 as ONE message carrying two PDFs: the recap and the morning's full
 scout report. Delivery failures exit 1 (undelivered = unseen).
 
+Visual issue (v1.18): the Edition became a two-page magazine issue in the
+same language as the Daily, not a plain text page. Page 1 — masthead + the
+macro scoreboard (a stat tile per series: level, colored week-over-week move,
+and the week's sparkline, ordered biggest proportional move first) + the
+week's events. Page 2 — discovery (shortlist churn coloured entered-green /
+dropped-red) with the scorecard's per-name α-vs-SPY diverging bars (reused
+from the scout page), then the week ahead. Two data fixes rode along: the
+macro week-over-week Δ now falls back to the week's FIRST run when a series
+has no prior-week baseline (the Jul-19 issue silently showed bare levels
+because `week_ago` was empty), with each run's value carried as
+`RecapMacroLine.path` for the sparkline; and an unchanged daily macro
+re-print (a `MacroPrint` with delta 0 — Fed-funds-effective printing the same
+value every day) rolls into the suppressed count instead of drowning the
+events section. Markdown recap stays the canonical record; the PDF gains the
+charts. Deterministic (CreationDate suppressed).
+
 ## Scout self-scoring — v1.5 ("grade the grader")
 
 A discovery engine you can't check is one you can't trust. Each scout run now

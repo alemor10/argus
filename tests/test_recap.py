@@ -126,13 +126,49 @@ def test_render_carries_every_section(con):
     out = render_recap(recap)
     assert "# Argus Sunday Edition — week ending 2026-07-19" in out
     assert "- 2026-07-13 — Price 15.00 → 25.40 (+69.3%, threshold 5.0%) vs 2026-07-10" in out
-    assert "_1 re-fired standing reminder(s) rolled up" in out
+    assert "_1 routine reminder(s) rolled up" in out
     assert "- VIX: 25.40 (Δ +10.40 over the week, from 15.00)" in out
     assert "NEW to the list: CCC." in out
     assert "Dropped off: AAA." in out
     assert "- NVDA — 2026-07-22 amc (est 1.05)" in out
     assert "print-time — not archived" in out
     assert "argus recap --week-ending 2026-07-19" in out
+
+
+def test_macro_path_and_delta_fall_back_to_first_in_window(con):
+    # No pre-window baseline for the series: Δ falls back to the week's first
+    # run (never silently dropped to a bare level), and path carries each run's
+    # value for the sparkline.
+    _watch_run(con, MON, vix=15.0)
+    _watch_run(con, WED, vix=18.0)
+    _watch_run(con, SUN, vix=20.0)
+    recap = build_recap(con, week_ending=WEEK_ENDING)
+    [line] = recap.macro
+    assert line.path == (15.0, 18.0, 20.0)
+    assert line.current == 20.0
+    assert line.week_ago == 15.0  # first in-window, since nothing preceded it
+    assert line.delta == pytest.approx(5.0)
+
+
+def test_unchanged_macro_print_rolls_up_but_a_real_move_shows(con):
+    # A daily series re-printing the same value (Fed funds effective) is noise;
+    # a genuine release (value moved) is the week's news.
+    from argus.models import MacroPrint
+
+    unchanged = MacroPrint(
+        ticker="^VIX", label="Fed funds (effective)", period=date(2026, 7, 15),
+        value=3.63, prev_value=3.63, delta=0.0,
+    )
+    moved = MacroPrint(
+        ticker="^VIX", label="CPI inflation (YoY)", period=date(2026, 7, 15),
+        value=3.5, prev_value=3.4, delta=0.1,
+    )
+    _watch_run(con, MON, vix=15.0, events=(unchanged, moved))
+    recap = build_recap(con, week_ending=WEEK_ENDING)
+    labels = [getattr(item.event, "label", None) for item in recap.events]
+    assert "CPI inflation (YoY)" in labels  # the real move is listed
+    assert "Fed funds (effective)" not in labels  # the unchanged re-print rolled up
+    assert recap.standing_suppressed == 1
 
 
 def test_quiet_week_is_stated_not_blank(con):
