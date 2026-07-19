@@ -770,8 +770,17 @@ change event rendered with the digest's own event lines — reused verbatim,
 the two artifacts must never tell different stories — and the bellwether
 calendar); page 2 is the state (watchlist table, thesis breaches, the full
 quarantine table, data health); then the per-ticker detail pages. Scout PDFs
-were already complete. Flowing blocks are capped with a disclosed overflow
-line — a matplotlib figure silently draws past the page edge.
+paginate their front matter (v1.17): page 1 is the shortlist (the
+new-this-week callout + the compact proposals table — every proposed name,
+one row — plus the sector-leaders strip); page 2 is the back matter
+(exclusions, the scorecard with its per-name α-vs-SPY diverging-bars chart,
+data health); a failed (outage) run collapses to one page. Only the top
+`_SCOUT_DETAIL_CAP` (12) proposals by rank earn a full detail page — the rest
+are read from the compact table — and each detail page carries a peer
+valuation dot plot (verified fwd P/E vs industry peers + median) and a
+rank-trajectory sparkline (screen rank across recent proposed weeks). Flowing
+blocks are capped with a disclosed overflow line — a matplotlib figure
+silently draws past the page edge.
 
 Delivery: Discord attaches the PDF (plus the headline text message, whose
 content is still extracted from the markdown's Changes section); the .md

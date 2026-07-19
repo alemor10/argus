@@ -93,6 +93,7 @@ def summarize(marks: Sequence[ScorecardMark], as_of: date, unpriceable: int) -> 
         overall_median_alpha=median(m.alpha for m in marks),
         overall_beat_spy=sum(1 for m in marks if m.alpha > 0),
         unpriceable=unpriceable,
+        marks=tuple(marks),
     )
 
 

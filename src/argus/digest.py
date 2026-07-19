@@ -169,6 +169,18 @@ def _proposals_section(report: RunReport) -> list[str]:
         # (below) still render: the strip must never vanish with the table.
         lines += ["No candidates passed the screen and the quality gates this run.", ""]
     else:
+        # Foreground the fresh names: a name on the list for the first time
+        # (streak <= 1) is what a reader who saw last week's issue scans for. A
+        # stable shortlist is information, not a bug — say so plainly (the
+        # Sunday Edition rolls up the full churn).
+        new_names = [p.ticker for p in proposed if p.streak <= 1]
+        if new_names:
+            lines += ["**New this week:** " + ", ".join(new_names), ""]
+        else:
+            lines += [
+                "_No new names cleared the screen this week — the shortlist held._",
+                "",
+            ]
         snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
         lines += [
             "| # | Ticker | Sector | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |",

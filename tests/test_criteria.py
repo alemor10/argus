@@ -299,7 +299,7 @@ def test_missing_file_yields_defaults(tmp_path):
     assert criteria.min_revenue_growth_pct == 10.0
     assert criteria.min_roe_pct == 15.0
     assert criteria.max_eps_decline_pct == -30.0
-    assert criteria.top_n == 15
+    assert criteria.top_n == 20
 
 
 def test_empty_file_yields_defaults(tmp_path):

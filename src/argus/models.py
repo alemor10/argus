@@ -621,9 +621,12 @@ class ScoutCandidateRecord(BaseModel):
 
 class ScoutProposal(ScoutCandidateRecord):
     """Report-side scout row: the record plus its derived streak —
-    consecutive scout runs (up to and including this one) it was proposed."""
+    consecutive scout runs (up to and including this one) it was proposed —
+    and its recent screen-rank trajectory (chronological ranks over the last
+    few proposed weeks, for the PDF's rank sparkline)."""
 
     streak: int = 0
+    rank_history: tuple[int, ...] = ()
 
 
 class BellwetherEarning(BaseModel):
@@ -817,6 +820,7 @@ class Scorecard(BaseModel):
     overall_median_alpha: float = 0.0
     overall_beat_spy: int = 0
     unpriceable: int = 0  # proposed names whose history could not be fetched
+    marks: tuple[ScorecardMark, ...] = ()  # per-name realized standing (for the PDF chart)
 
 
 class RecapEvent(BaseModel):
@@ -831,7 +835,9 @@ class RecapEvent(BaseModel):
 
 class RecapMacroLine(BaseModel):
     """One macro series, week over week — current level vs the last accepted
-    value before the window opened."""
+    value before the window opened (falling back to the week's first run when
+    the series has no prior-week baseline yet). `path` is the accepted value in
+    each of the week's watch runs, oldest→newest, for the Edition's sparkline."""
 
     model_config = ConfigDict(frozen=True)
 
@@ -841,6 +847,7 @@ class RecapMacroLine(BaseModel):
     current: float
     week_ago: float | None = None
     delta: float | None = None
+    path: tuple[float, ...] = ()
 
 
 class RecapReport(BaseModel):

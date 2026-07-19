@@ -56,8 +56,8 @@ class ScoutCriteria(BaseModel):
     min_roe_pct: float = 15.0
     max_debt_to_equity: float = 1.0
     max_eps_decline_pct: float = -30.0  # value-trap guard: TTM EPS trend must stay above
-    max_per_sector: int = 3  # shortlist concentration cap (0 disables) — a single-metric
-    top_n: int = 15  #          ranking otherwise becomes one sector bet wearing 15 tickers
+    max_per_sector: int = 4  # shortlist concentration cap (0 disables) — a single-metric
+    top_n: int = 20  #          ranking otherwise becomes one sector bet wearing N tickers
 
 
 def load_scout_criteria(path: Path) -> ScoutCriteria:

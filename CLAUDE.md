@@ -124,6 +124,19 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       is baseline). Rides EdgarSource as a best-effort secondary channel;
       grants/options/sales filtered at the adapter. Dormant until names held.
       See ARCHITECTURE.md, Insider buys.
+- [x] Scout breadth + visual shortlist (v1.17, 2026-07-19): a wider funnel
+      (`top_n` 15→20, `max_per_sector` 3→4) surfaces more names, and the scout
+      PDF paginates its front matter — page 1 the shortlist (a **New this
+      week** callout foregrounding first-seen names, streak ≤ 1, + the compact
+      proposals table that IS the long tail's home), page 2 the back matter
+      (exclusions, scorecard, data health). Only the top 12 proposals by rank
+      earn a full detail page; the rest read from the table. Three new charts,
+      all backward/current-looking (no forecasts): a per-name **α-vs-SPY
+      diverging-bars** scorecard chart, a per-name **peer valuation dot plot**
+      (verified fwd P/E vs industry peers + median — the "cheap for its
+      growth" thesis made visual), and a **rank-trajectory sparkline** (screen
+      rank across recent proposed weeks). Markdown digest unchanged except the
+      callout; goldens hold. See ARCHITECTURE.md, PDF-first delivery.
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 

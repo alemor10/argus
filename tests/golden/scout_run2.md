@@ -4,6 +4,8 @@ Status: PARTIAL — some tickers or sources failed this run; degradation is deta
 
 ## Proposals
 
+_No new names cleared the screen this week — the shortlist held._
+
 | # | Ticker | Sector | Streak | Price | Fwd P/E | Gross margin | Op margin | ROE | D/E |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | 1 | CLEANCO | Technology | 2w | 100.00 | 14.80 | 55.0% | — | — | — |

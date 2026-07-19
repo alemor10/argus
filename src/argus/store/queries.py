@@ -276,6 +276,31 @@ def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
     return streak
 
 
+def scout_rank_history(
+    con: sqlite3.Connection, ticker: str, run_id: int, limit: int = 8
+) -> tuple[int, ...]:
+    """The ticker's global screen rank across the most recent scout runs (up to
+    and including run_id) in which it was PROPOSED, chronological (oldest →
+    newest). Proposed-run ranks only — weeks it fell off the shortlist are
+    simply absent, never faked with a placeholder rank — so a rising line is a
+    real climb up the screen. Powers the rank-trajectory sparkline."""
+    ranks: list[int] = []
+    for row in con.execute(
+        "SELECT run_id FROM runs WHERE kind = 'scout' AND run_id <= ? ORDER BY run_id DESC",
+        (run_id,),
+    ):
+        hit = con.execute(
+            "SELECT rank FROM scout_candidates "
+            "WHERE run_id = ? AND ticker = ? AND status = 'proposed'",
+            (row["run_id"], ticker),
+        ).fetchone()
+        if hit is not None:
+            ranks.append(hit["rank"])
+            if len(ranks) >= limit:
+                break
+    return tuple(reversed(ranks))
+
+
 def _scout_proposals(con: sqlite3.Connection, run_id: int) -> tuple[ScoutProposal, ...]:
     """Hydrate the run's scout rows: proposed first (by rank), then sector
     leaders, then excluded."""
@@ -297,6 +322,11 @@ def _scout_proposals(con: sqlite3.Connection, run_id: int) -> tuple[ScoutProposa
             screener_metrics=json.loads(row["screener_metrics"]),
             peer_context=json.loads(row["peer_context"]) if row["peer_context"] else None,
             streak=scout_streak(con, row["ticker"], run_id) if row["status"] == "proposed" else 0,
+            rank_history=(
+                scout_rank_history(con, row["ticker"], run_id)
+                if row["status"] == "proposed"
+                else ()
+            ),
         )
         for row in rows
     )

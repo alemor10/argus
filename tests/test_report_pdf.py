@@ -25,6 +25,7 @@ from argus.models import (
     RunReport,
     Scorecard,
     ScorecardCohort,
+    ScorecardMark,
     ScoutProposal,
     Snapshot,
     SourceHealth,
@@ -320,31 +321,34 @@ class TestScoutPdf:
         assert len(pdf) > 2048
 
     def test_one_summary_page_plus_one_per_proposed_candidate(self):
-        # Two proposed + one excluded → 3 pages: the excluded name is listed
-        # on the summary page but earns no detail page.
+        # Two proposed + one excluded → 4 pages: two front pages (proposals +
+        # back matter) then one detail page per proposed name. The excluded
+        # name is listed on the back page but earns no detail page.
         pdf = build_pdf(
             _two_proposal_report(),
             {"AAA": _synthetic_history(), "BBB": _synthetic_history(base=50.0)},
         )
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4
 
     def test_none_history_renders_unavailable_note_page(self):
         # None means "could not be fetched" — the detail page still renders,
         # with a visible note in the chart's place.
         pdf = build_pdf(_two_proposal_report(), {"AAA": None, "BBB": None})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4
 
     def test_empty_history_mapping_and_empty_point_lists(self):
         for history in ({}, {"AAA": [], "BBB": []}):
             pdf = build_pdf(_two_proposal_report(), history)
             assert pdf.startswith(b"%PDF")
-            assert _page_count(pdf) == 3
+            assert _page_count(pdf) == 4
 
-    def test_zero_proposals_still_yields_a_valid_one_page_pdf(self):
+    def test_zero_proposals_still_yields_a_valid_pdf(self):
+        # A complete run that surfaced nothing still emits both front pages:
+        # page 1 says "nothing passed", page 2 carries the scorecard + health.
         pdf = build_pdf(_scout_report([], []), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 1
+        assert _page_count(pdf) == 2
 
     def test_failed_run_with_notes_is_one_honest_page(self):
         report = _scout_report(
@@ -354,18 +358,33 @@ class TestScoutPdf:
         assert pdf.startswith(b"%PDF")
         assert _page_count(pdf) == 1
 
-    def test_detail_pages_capped_at_25(self):
+    def test_detail_pages_capped_at_12(self):
         proposals = [_proposal(f"T{i:02d}", i, streak=2) for i in range(1, 31)]
         pdf = build_pdf(_scout_report(proposals, []), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 26  # summary + 25, not 31
+        # two front pages + the top 12 proposals by rank, not 30: the rest ride
+        # the page-1 compact table.
+        assert _page_count(pdf) == 14
 
     def test_proposal_without_enrichment_snapshot_renders_dashes_not_crash(self):
         # report.tickers carries no entry for the proposed name: every metric
         # is '—' and the page still renders.
         pdf = build_pdf(_scout_report([_proposal("GHOST", 1)], []), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # two front pages + one detail page
+
+    def test_rank_trajectory_and_peer_dotplot_render_and_stay_deterministic(self):
+        # A multi-week proposal with peer context exercises both the header
+        # rank sparkline and the peer valuation dot plot on its detail page.
+        proposal = _proposal(
+            "AAA", 3, streak=3, sector="Technology", peer_context=_PEER_CONTEXT
+        ).model_copy(update={"rank_history": (8, 5, 3)})
+        report = _scout_report([proposal], [_ticker_report("AAA", _rich_values())])
+        history = {"AAA": _synthetic_history()}
+        pdf = build_pdf(report, history)
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 3  # two front pages + one detail page
+        assert build_pdf(report, history) == build_pdf(report, history)
 
 
 class TestWatchPdf:
@@ -392,7 +411,7 @@ class TestMalformedValues:
         report = _scout_report([_proposal("AAA", 1)], [_ticker_report("AAA", values)])
         pdf = build_pdf(report, {"AAA": _synthetic_history()})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # two front pages + one detail page
 
     def test_malformed_history_points_are_skipped_not_fatal(self):
         # Contract says (date, float) tuples, but display data is untrusted:
@@ -408,7 +427,7 @@ class TestMalformedValues:
         report = _scout_report([_proposal("AAA", 1)], [_ticker_report("AAA", _garp_values())])
         pdf = build_pdf(report, history)
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # two front pages + one detail page
 
 
 class TestBusinessBlock:
@@ -433,14 +452,14 @@ class TestBusinessBlock:
             {"AAA": _synthetic_revenue(), "BBB": _synthetic_revenue()},
         )
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
     def test_profile_none_renders_unavailable_line_not_crash(self):
         # _two_proposal_report carries no profiles at all — every detail page
         # takes the 'business profile unavailable' path.
         pdf = build_pdf(_two_proposal_report(), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
     def test_empty_shell_profile_is_treated_as_unavailable(self):
         shell = _profile(
@@ -449,7 +468,7 @@ class TestBusinessBlock:
         tickers = [_ticker_report("AAA", _garp_values(), profile=shell)]
         pdf = build_pdf(_scout_report([_proposal("AAA", 1)], tickers), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # two front pages + one detail page
 
     def test_watch_pages_render_profiles_too(self):
         report = _watch_report()
@@ -548,7 +567,7 @@ class TestRevenuePanel:
             {"AAA": _synthetic_revenue(), "BBB": _synthetic_revenue()},
         )
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
     def test_none_or_missing_series_renders_unavailable_note(self):
         # None mapping (legacy two-arg behavior), empty mapping, and explicit
@@ -556,7 +575,7 @@ class TestRevenuePanel:
         for series in (None, {}, {"AAA": None, "BBB": []}):
             pdf = build_pdf(_two_proposal_report(), {}, series)
             assert pdf.startswith(b"%PDF")
-            assert _page_count(pdf) == 3
+            assert _page_count(pdf) == 4  # two front pages + two detail pages
 
     def test_malformed_revenue_points_are_skipped_not_fatal(self):
         series = {
@@ -571,7 +590,7 @@ class TestRevenuePanel:
         }
         pdf = build_pdf(_two_proposal_report(), {}, series)
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
 
 class TestRevenueFormatting:
@@ -610,7 +629,7 @@ class TestNewFieldFormatting:
         )
         pdf = build_pdf(report, {"AAA": _synthetic_history()}, {"AAA": _synthetic_revenue()})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # two front pages + one detail page
 
 
 class TestGroupedSummary:
@@ -640,9 +659,9 @@ class TestGroupedSummary:
             {"AAA": _synthetic_revenue()},
         )
         assert pdf.startswith(b"%PDF")
-        # 3 proposed detail pages + summary; the leader and the exclusion
-        # appear on the summary only.
-        assert _page_count(pdf) == 4
+        # 3 proposed detail pages + two front pages; the leader and the
+        # exclusion appear on the front pages only.
+        assert _page_count(pdf) == 5
 
 
 class TestLeadersStrip:
@@ -662,8 +681,9 @@ class TestLeadersStrip:
         assert _leader_line(junk) == "Utilities — GGG (#7 overall)"
 
     def test_leaders_get_no_detail_pages(self):
-        # Two proposed + one leader + one excluded → 3 pages: the leader is a
-        # summary-strip line only (never enriched, nothing verified to show).
+        # Two proposed + one leader + one excluded → 4 pages: two front pages +
+        # two proposed detail pages. The leader is a front-page strip line only
+        # (never enriched, nothing verified to show).
         proposals = [
             _proposal("AAA", 1, sector="Technology"),
             _proposal("BBB", 2, sector="Healthcare"),
@@ -676,7 +696,7 @@ class TestLeadersStrip:
         ]
         pdf = build_pdf(_scout_report(proposals, tickers), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4
 
 
 class TestDataHealthBlock:
@@ -703,7 +723,7 @@ class TestDataHealthBlock:
     def test_health_block_renders_on_summary_page(self):
         pdf = build_pdf(_multi_sector_report(notes="screener degraded: 2 retries"), {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 4
+        assert _page_count(pdf) == 5  # two front pages + three proposed detail pages
 
 
 class TestPeersLine:
@@ -749,7 +769,7 @@ class TestPeersLine:
         )
         pdf = build_pdf(report, {"AAA": _synthetic_history()})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 2
+        assert _page_count(pdf) == 3  # two front pages + one detail page
 
 
 class TestFiscalYearCaption:
@@ -809,7 +829,7 @@ class TestDeterminism:
         # (report, history) and every revenue panel reads 'unavailable'.
         pdf = build_pdf(_two_proposal_report(), {"AAA": _synthetic_history()})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
 
 # --- Scorecard (grade the grader — scout summary page only) ------------------
@@ -886,7 +906,7 @@ class TestScorecard:
         history = {"AAA": _synthetic_history(), "BBB": None}
         pdf = build_pdf(report, history)
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3  # summary + two proposed detail pages
+        assert _page_count(pdf) == 4  # two front pages + two proposed detail pages
         assert build_pdf(report, history) == build_pdf(report, history)
 
     def test_none_scorecard_takes_the_forward_log_path(self):
@@ -896,13 +916,13 @@ class TestScorecard:
         assert report.scorecard is None
         pdf = build_pdf(report, {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
     def test_overall_n_zero_scorecard_takes_the_forward_log_path(self):
         report = _report_with_scorecard(Scorecard(as_of=date(2026, 7, 12), unpriceable=1))
         pdf = build_pdf(report, {})
         assert pdf.startswith(b"%PDF")
-        assert _page_count(pdf) == 3
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
 
     def test_watch_pages_never_render_a_scorecard(self):
         # Scout-only: a watch run with a scorecard attached ignores it and its
@@ -911,6 +931,23 @@ class TestScorecard:
         pdf = build_pdf(report, {"NVDA": _synthetic_history(base=150.0)})
         assert pdf.startswith(b"%PDF")
         assert _page_count(pdf) == 5  # news + status + 3 tickers
+
+    def test_per_name_marks_render_the_diverging_chart_deterministically(self):
+        # A scorecard carrying per-name marks draws the α-vs-SPY bars on the
+        # back page; the render stays byte-deterministic (no clock, no random).
+        marks = tuple(
+            ScorecardMark(
+                ticker=t, first_proposed_at=date(2026, 6, 1), weeks_out=6,
+                name_return=nr, spy_return=0.02,
+            )
+            for t, nr in (("AAA", 0.12), ("BBB", -0.05), ("CCC", 0.0))
+        )
+        report = _report_with_scorecard(_scorecard().model_copy(update={"marks": marks}))
+        history = {"AAA": _synthetic_history(), "BBB": None}
+        pdf = build_pdf(report, history)
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 4  # two front pages + two detail pages
+        assert build_pdf(report, history) == build_pdf(report, history)
 
 
 # --- Thesis checks (watch pages) --------------------------------------------

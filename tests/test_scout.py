@@ -485,6 +485,29 @@ class TestScoutRun:
         assert proposed[0].streak == 2
         assert first.run_id != second.run_id
 
+    def test_rank_history_tracks_proposed_ranks_chronologically(self, con):
+        """rank_history carries the ticker's screen rank across recent proposed
+        scout runs, oldest→newest, powering the PDF rank sparkline. A name never
+        proposed contributes no points (gaps are honest, never faked)."""
+        sink = _CaptureSink()
+        _scout(con, sink, RUN1_AT)  # CLEANCO proposed at rank 1
+        second = _scout(con, sink, RUN2_AT)  # proposed again at rank 1
+        assert queries.scout_rank_history(con, "CLEANCO", second.run_id) == (1, 1)
+        assert queries.scout_rank_history(con, "THINCO", second.run_id) == ()  # never proposed
+        report = queries.run_report(con, second.run_id)
+        cleanco = next(p for p in report.scout if p.ticker == "CLEANCO")
+        assert cleanco.rank_history == (1, 1)
+
+    def test_new_this_week_callout_lists_fresh_names_then_says_held(self, con):
+        """A first-time name (streak 1) is called out by ticker; once it is a
+        returning name the callout reports the shortlist held — the honest
+        version of 'nothing new cleared the screen'."""
+        sink = _CaptureSink()
+        first = _scout(con, sink, RUN1_AT)
+        assert "**New this week:** CLEANCO" in sink.digests[first.run_id]
+        second = _scout(con, sink, RUN2_AT)
+        assert "No new names cleared the screen this week" in sink.digests[second.run_id]
+
     def test_golden_scout_digest(self, con, update_golden):
         sink = _CaptureSink()
         _scout(con, sink, RUN1_AT, price_fetcher=_synthetic_prices)

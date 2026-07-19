@@ -87,7 +87,9 @@ History = Mapping[str, Sequence[tuple[date, float]] | None]
 # values, or None when unavailable. UNGATED display data like `history`.
 RevenueSeries = Mapping[str, Sequence[tuple[int, float]] | None]
 
-_MAX_DETAIL_PAGES = 25  # a shortlist longer than this is a screening bug, not a report
+_MAX_DETAIL_PAGES = 25  # watch: a watchlist longer than this is unusual — disclose the cap
+_SCOUT_DETAIL_CAP = 12  # scout: only the top-ranked proposals earn a full chart page; the
+#                         rest ride the page-1 compact table (every proposal is listed there)
 
 _PAGE = (8.5, 11.0)  # letter portrait: charts wide enough, tables tall enough
 
@@ -194,7 +196,8 @@ def build_pdf(
     as '—' — the report path never crashes on bad data, it discloses it.
     """
     subjects = _detail_subjects(report)
-    shown = subjects[:_MAX_DETAIL_PAGES]
+    detail_cap = _SCOUT_DETAIL_CAP if report.kind == "scout" else _MAX_DETAIL_PAGES
+    shown = subjects[:detail_cap]
     metadata = {
         # No wall-clock anywhere: the title carries report.as_of, and
         # CreationDate is suppressed so identical inputs → identical bytes.
@@ -206,12 +209,6 @@ def build_pdf(
     revenue = revenue_series or {}
     buffer = io.BytesIO()
     with PdfPages(buffer, metadata=metadata) as pdf:
-        _save(
-            pdf,
-            _summary_page(
-                report, history, total_details=len(subjects), shown_details=len(shown)
-            ),
-        )
         if report.kind == "watch":
             # PDF-first (v1.8): the PDF is the delivered artifact, so it
             # carries the WHOLE digest — page 1 is the news (masthead, macro
@@ -220,6 +217,12 @@ def build_pdf(
             # table, quarantines, data health — skipped when there is no
             # state to show, its health block riding the wire page instead),
             # then the per-ticker detail pages.
+            _save(
+                pdf,
+                _summary_page(
+                    report, history, total_details=len(subjects), shown_details=len(shown)
+                ),
+            )
             if report.market is not None:
                 _save(pdf, _market_wire_page(report))
                 features = report.market.features
@@ -231,6 +234,14 @@ def build_pdf(
                         ),
                     )
             _save(pdf, _watch_status_page(report))
+        else:
+            # Scout paginates its own front matter: the shortlist (compact
+            # table + new-this-week) on page 1, the back matter (exclusions,
+            # scorecard, health) on page 2 — a failed run collapses to one.
+            for page in _scout_pages(
+                report, total_details=len(subjects), shown_details=len(shown)
+            ):
+                _save(pdf, page)
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
     return buffer.getvalue()
@@ -309,25 +320,17 @@ class _Cursor:
 def _summary_page(
     report: RunReport, history: History, *, total_details: int, shown_details: int
 ) -> Figure:
+    """Watch page 1 — masthead + the day's news (macro dashboard, Changes,
+    Radar). Scout paginates its front matter through _scout_pages instead."""
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
-    if report.kind == "watch":
-        _masthead(fig, cur, report)
-    else:
-        cur.line(
-            f"Argus {report.kind} digest — run {report.run_id} — {report.as_of.date().isoformat()}",
-            size=15, weight="bold",
-        )
-        cur.gap(0.012)
+    _masthead(fig, cur, report)
     cur.wrapped(_status_line(report), size=9.5, color=_SECONDARY)
     if report.notes:
         cur.gap(0.004)
         cur.wrapped(f"Note: {report.notes}", size=9, color=_SECONDARY, style="italic")
     cur.gap(0.014)
-    if report.kind == "scout":
-        _scout_summary(fig, cur, report)
-    else:
-        _watch_news(fig, cur, report, history)
+    _watch_news(fig, cur, report, history)
     if total_details > shown_details:
         cur.gap(0.012)
         cur.line(
@@ -359,9 +362,63 @@ def _status_line(report: RunReport) -> str:
     return "Status: FAILED — this run produced no usable data."
 
 
-def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+def _scout_pages(
+    report: RunReport, *, total_details: int, shown_details: int
+) -> list[Figure]:
+    """Scout front matter, paginated so the shortlist can grow and the charts
+    have room: page 1 is the shortlist (new-this-week callout + the compact
+    proposals table — every proposed name, one row — plus the sector-leaders
+    strip), page 2 the back matter (exclusions, the scorecard grading past
+    proposals vs SPY with its diverging-bars chart, data health). A failed run
+    (screener outage) collapses to a single honest page. The compact table is
+    the long tail's home: only the top _SCOUT_DETAIL_CAP proposals earn a full
+    detail page; the rest are read from the table."""
+    fig1 = plt.figure(figsize=_PAGE)
+    cur = _Cursor(fig1)
+    cur.line(
+        f"Argus scout digest — run {report.run_id} — {report.as_of.date().isoformat()}",
+        size=15, weight="bold",
+    )
+    cur.gap(0.012)
+    cur.wrapped(_status_line(report), size=9.5, color=_SECONDARY)
+    if report.notes:
+        cur.gap(0.004)
+        cur.wrapped(f"Note: {report.notes}", size=9, color=_SECONDARY, style="italic")
+    cur.gap(0.014)
+    _scout_proposals_block(fig1, cur, report)
+    if total_details > shown_details:
+        cur.gap(0.010)
+        cur.line(
+            f"Detail pages: the top {shown_details} of {total_details} proposals by rank; "
+            "every proposal is in the table above.",
+            size=8.5, color=_MUTED,
+        )
+    if report.status == "failed":
+        # An outage has no back matter worth a second page — health explains it
+        # here, and the run collapses to one honest page.
+        cur.gap(0.016)
+        cur.line("Data health", size=11, weight="bold")
+        cur.gap(0.008)
+        for text, tone in _health_lines(report):
+            cur.line(text, size=8.5, color=tone)
+        _page_footer(fig1, report)
+        return [fig1]
+    _page_footer(fig1, report)
+
+    fig2 = plt.figure(figsize=_PAGE)
+    cur2 = _Cursor(fig2)
+    cur2.line(f"Argus scout — run {report.run_id} (continued)", size=10, color=_SECONDARY)
+    cur2.gap(0.016)
+    _scout_back_blocks(fig2, cur2, report)
+    _page_footer(fig2, report)
+    return [fig1, fig2]
+
+
+def _scout_proposals_block(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+    """The shortlist: the new-this-week callout, the compact proposals table
+    (every proposed name, grouped by canonical sector — gate-verified values),
+    and the sector-leaders strip."""
     proposed = [p for p in report.scout if p.status == "proposed"]
-    excluded = [p for p in report.scout if p.status == "excluded"]
     leaders = [p for p in report.scout if p.status == "leader"]
     snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
     profiles = {t.context.ticker: t.profile for t in report.tickers}
@@ -375,6 +432,7 @@ def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
     elif not proposed:
         cur.line("No candidates passed the screen and the quality gates this run.", color=_SECONDARY)
     else:
+        _new_this_week_line(cur, proposed)
         columns = [
             "#", "Ticker", "Industry", "Streak", "Price",
             "Fwd P/E", "Gross m.", "Op m.", "ROE", "D/E",
@@ -427,7 +485,28 @@ def _scout_summary(fig: Figure, cur: _Cursor, report: RunReport) -> None:
             size=8, color=_MUTED, style="italic",
         )
 
-    cur.gap(0.016)
+
+def _new_this_week_line(cur: _Cursor, proposed: Sequence[ScoutProposal]) -> None:
+    """Foreground the fresh names: a name on the list for the first time
+    (streak ≤ 1) is what a reader who saw last week's issue is scanning for.
+    When nothing new cleared the screen, say so plainly — a stable shortlist
+    is information, not a bug (the Sunday Edition tracks the churn in full)."""
+    new_names = [p.ticker for p in proposed if p.streak <= 1]
+    if new_names:
+        cur.line("⚡ New this week: " + ", ".join(new_names), size=9.5, weight="bold", color=_UP)
+    else:
+        cur.line(
+            "No new names cleared the screen this week — the shortlist held.",
+            size=8.5, color=_MUTED, style="italic",
+        )
+    cur.gap(0.006)
+
+
+def _scout_back_blocks(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+    """Scout page 2 — the back matter: names excluded after enrichment, the
+    scorecard grading past proposals vs SPY (table + diverging-bars chart), and
+    the data-health rollup mirroring the markdown digest's."""
+    excluded = [p for p in report.scout if p.status == "excluded"]
     cur.line("Excluded after enrichment", size=11, weight="bold")
     cur.gap(0.008)
     if not excluded:
@@ -502,8 +581,61 @@ def _scout_scorecard(fig: Figure, cur: _Cursor, report: RunReport) -> None:
     cur.gap(0.004)
     text, tone = _scorecard_overall_line(card)
     cur.line(text, size=9, weight="bold", color=tone)
+    _scorecard_chart(fig, cur, card)
     cur.gap(0.002)
     cur.wrapped(_SCORECARD_CAPTION, size=8, color=_MUTED, style="italic", width=120, max_lines=2)
+
+
+# The cohort table summarizes; this chart shows every scored name so the shape
+# of the grade — how many beat, by how much — is legible at a glance.
+_SCORECARD_CHART_CAP = 26  # more scored names than fit; disclose the overflow
+
+
+def _scorecard_chart(fig: Figure, cur: _Cursor, card: Scorecard) -> None:
+    """Per-name α vs SPY as diverging bars — the honest self-grade made
+    visible: green beat the market, red lagged, the sign always printed too
+    (never color alone). Best-to-worst; realized data only, the market the
+    answer key. Skipped when the run persisted no per-name marks (old runs
+    predate the field), so the cohort table still stands alone."""
+    marks = sorted(card.marks, key=lambda m: m.alpha, reverse=True)
+    if not marks:
+        return
+    shown = marks[:_SCORECARD_CHART_CAP]
+    cur.gap(0.008)
+    cur.line("Per-name α vs SPY (realized, since first proposed)", size=8.5, color=_SECONDARY)
+    cur.gap(0.004)
+    height = 0.016 * len(shown)
+    ax = fig.add_axes((0.16, cur.y - height, 0.72, height))
+    values = [m.alpha * 100 for m in shown][::-1]  # matplotlib barh plots bottom-up
+    labels = [m.ticker for m in shown][::-1]
+    colors = [_UP if v > 0 else _CRITICAL if v < 0 else _BASELINE for v in values]
+    ax.barh(range(len(values)), values, color=colors, height=0.62)
+    ax.axvline(0, color=_BASELINE, linewidth=0.8)
+    ax.set_yticks([])
+    ax.set_xticks([])
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+    biggest = max(abs(v) for v in values) or 1.0
+    ax.set_xlim(-biggest * 1.6, biggest * 1.6)
+    for i, (v, label) in enumerate(zip(values, labels)):
+        # Ticker on the empty side of zero; the α value at the bar's tip.
+        ax.annotate(
+            label, xy=(0, i), xytext=(-5 if v >= 0 else 5, 0),
+            textcoords="offset points", va="center",
+            ha="right" if v >= 0 else "left",
+            fontsize=6.5, fontweight="bold", color=_INK,
+        )
+        ax.annotate(
+            f"{v:+.1f}%", xy=(v, i), xytext=(4 if v >= 0 else -4, 0),
+            textcoords="offset points", va="center",
+            ha="left" if v >= 0 else "right",
+            fontsize=6, color=_SECONDARY,
+        )
+    cur.gap(height + 0.012)
+    if len(marks) > len(shown):
+        cur.line(
+            f"… and {len(marks) - len(shown)} more scored names.", size=7.5, color=_MUTED
+        )
 
 
 def _scorecard_rows(card: Scorecard) -> list[list[str]]:
@@ -1289,6 +1421,8 @@ def _detail_page(
         0.93, 0.952, _detail_subtitle(ticker_report, proposal),
         ha="right", va="top", fontsize=9.5, color=_SECONDARY,
     )
+    if proposal is not None:
+        _rank_trajectory(fig, proposal)
 
     cur = _Cursor(fig, y=0.915)
     _business_block(cur, ticker_report.profile if ticker_report is not None else None)
@@ -1306,13 +1440,7 @@ def _detail_page(
                 f"gate-verified): {claims}",
                 size=8, color=_MUTED, style="italic", width=118, max_lines=2,
             )
-        peers = _peer_line(proposal, snapshot)
-        if peers is not None:
-            cur.gap(0.004)
-            cur.wrapped(
-                f"Industry peers (screener claims): {peers}",
-                size=8, color=_MUTED, style="italic", width=118, max_lines=2,
-            )
+        _peer_dotplot(fig, cur, proposal, snapshot)
     else:
         assert ticker_report is not None  # watch subjects always carry their report
         if ticker_report.context.thesis:
@@ -1432,7 +1560,7 @@ def _business_block(cur: _Cursor, profile: CompanyProfile | None) -> None:
     if identity:
         cur.line(identity, size=8.5, color=_SECONDARY)
     if profile.summary:
-        cur.wrapped(profile.summary, size=8, color=_SECONDARY, width=118, max_lines=5)
+        cur.wrapped(profile.summary, size=8, color=_SECONDARY, width=118, max_lines=4)
     cur.gap(0.008)
 
 
@@ -1530,6 +1658,77 @@ def _peer_line(proposal: ScoutProposal, snapshot: Snapshot | None) -> str | None
     return " · ".join(parts)
 
 
+def _peer_dotplot(
+    fig: Figure, cur: _Cursor, proposal: ScoutProposal, snapshot: Snapshot | None
+) -> None:
+    """The industry-peer valuation, drawn: each peer's screener forward P/E as
+    a dot along a shared axis, the industry median as a dashed reference, and
+    the candidate's OWN gate-verified forward P/E highlighted in the series
+    hue — claim and verified value side by side, the screen's 'cheap for its
+    growth' thesis made visual (lower/left = cheaper). Falls back to the text
+    peer line when the data is thin or the page is out of room, so the context
+    is never silently dropped."""
+    ctx = proposal.peer_context or {}
+    own = _verified_num(snapshot, Field.PE_FWD)
+    peers: list[tuple[str, float]] = []
+    for peer in tuple(ctx.get("peers") or ())[:8]:
+        if isinstance(peer, Mapping) and _finite(peer.get("fwd_pe")):
+            name = str(peer.get("ticker") or "").strip()
+            if name:
+                peers.append((_clip(name, 8), float(peer["fwd_pe"])))
+    median = ctx.get("median_fwd_pe")
+    industry = str(ctx.get("industry") or "").strip() or "industry"
+    height = 0.052
+    # Need the candidate's own verified value plus a reference (a peer or the
+    # median) to draw anything meaningful; and enough room above the charts
+    # (top at y=0.60). Otherwise the text line carries the same facts.
+    if own is None or not (peers or _finite(median)) or cur.y - height - 0.03 < 0.60:
+        line = _peer_line(proposal, snapshot)
+        if line is not None:
+            cur.gap(0.004)
+            cur.wrapped(
+                f"Industry peers (screener claims): {line}",
+                size=8, color=_MUTED, style="italic", width=118, max_lines=2,
+            )
+        return
+
+    cur.gap(0.006)
+    cur.line(
+        f"Valuation vs {_clip(industry, 44)} peers — forward P/E "
+        "(screener claims; ● = verified)",
+        size=8, color=_SECONDARY,
+    )
+    cur.gap(0.004)
+    ax = fig.add_axes((0.10, cur.y - height, 0.80, height))
+    xs = [pe for _, pe in peers] + [own] + ([float(median)] if _finite(median) else [])
+    lo, hi = min(xs), max(xs)
+    span = (hi - lo) or 1.0
+    ax.set_xlim(lo - 0.14 * span, hi + 0.14 * span)
+    ax.set_ylim(0, 1)
+    ax.axhline(0.5, color=_GRID, linewidth=0.6, zorder=0)
+    for name, pe in peers:
+        ax.plot([pe], [0.5], "o", color=_BASELINE, markersize=6, zorder=2)
+        ax.annotate(
+            name, xy=(pe, 0.5), xytext=(0, 7), textcoords="offset points",
+            ha="center", va="bottom", fontsize=5.5, color=_MUTED,
+        )
+    if _finite(median):
+        m = float(median)
+        ax.axvline(m, color=_SECONDARY, linewidth=0.8, linestyle=(0, (3, 2)), zorder=1)
+        ax.annotate(
+            f"median {m:g}", xy=(m, 0.0), ha="center", va="bottom",
+            fontsize=5.5, color=_SECONDARY,
+        )
+    ax.plot([own], [0.5], "o", color=_SERIES, markersize=9, zorder=3)
+    ax.annotate(
+        f"{proposal.ticker} {own:.1f}", xy=(own, 0.5), xytext=(0, -11),
+        textcoords="offset points", ha="center", va="top",
+        fontsize=7, fontweight="bold", color=_INK,
+    )
+    ax.axis("off")
+    cur.gap(height + 0.016)
+
+
 def _finite(value: object) -> bool:
     """True for a real, finite number — the guard every screener-claim
     field passes through before being formatted (claims are untrusted)."""
@@ -1558,6 +1757,31 @@ def _verified_num(snapshot: Snapshot | None, field: Field) -> float | None:
 def _ordinal(n: int) -> str:
     suffix = "th" if 10 <= n % 100 <= 20 else {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
     return f"{n}{suffix}"
+
+
+def _rank_trajectory(fig: Figure, proposal: ScoutProposal) -> None:
+    """A tiny sparkline of the candidate's screen rank across recent proposed
+    weeks, tucked into the header's right-side whitespace under the subtitle.
+    Rank 1 is pinned to the TOP (best), so a line rising = a name the screen
+    likes more each week, falling = fading. Needs at least two proposed
+    appearances; a name in its first week has no trajectory yet."""
+    ranks = list(proposal.rank_history)
+    if len(ranks) < 2:
+        return
+    # Sits directly under the subtitle ("screen rank N — … weeks"), which
+    # already names it — so the strip carries only its endpoint ranks.
+    x, y, w, h = 0.72, 0.908, 0.155, 0.016
+    ax = fig.add_axes((x, y, w, h))
+    xs = range(len(ranks))
+    ax.plot(xs, ranks, color=_SERIES, linewidth=1.0)
+    ax.plot([len(ranks) - 1], [ranks[-1]], "o", color=_SERIES, markersize=2.5)
+    ax.invert_yaxis()  # rank 1 (best) at the top
+    ax.margins(x=0.10, y=0.45)
+    ax.axis("off")
+    fig.text(x - 0.006, y + h / 2, f"#{ranks[0]}",
+             ha="right", va="center", fontsize=6, color=_MUTED)
+    fig.text(x + w + 0.006, y + h / 2, f"#{ranks[-1]}",
+             ha="left", va="center", fontsize=6.5, color=_INK)
 
 
 def _detail_subtitle(ticker_report: TickerReport | None, proposal: ScoutProposal | None) -> str:
