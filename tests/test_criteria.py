@@ -13,8 +13,10 @@ from pydantic import ValidationError
 from argus.scout.criteria import (
     ScoutCriteria,
     ScreenedCandidate,
+    deterioration,
     load_scout_criteria,
     screen,
+    sector_board,
 )
 from argus.scout.screener import ScreenerRow
 
@@ -390,3 +392,65 @@ def test_empty_sector_is_information_not_padding():
     result = screen(rows, ScoutCriteria(), exclude=frozenset())
     sectors = {c.sector for c in result.shortlist} | {c.sector for c in result.sector_leaders}
     assert sectors == {"Technology"}
+
+
+# --- Non-quality lenses on the full scan (v1.19) ------------------------------
+
+
+def test_sector_board_fills_sectors_the_quality_screen_rejects():
+    """A bank (no gross margin, 9x leverage) and a utility (low growth/ROE) both
+    fail the quality screen, yet the board surfaces them by within-sector
+    forward-PEG — the whole point of the relative lens."""
+    rows = [
+        make_row(ticker="BANK", sector="Finance", fwd_pe=11.0, revenue_growth_ttm_pct=8.0,
+                 gross_margin_pct=None, debt_to_equity=9.0, roe_pct=13.0),
+        make_row(ticker="UTIL", sector="Utilities", fwd_pe=18.0, revenue_growth_ttm_pct=4.0,
+                 roe_pct=10.0, gross_margin_pct=30.0),
+    ]
+    # Neither passes the quality screen...
+    assert screen(rows, ScoutCriteria(), exclude=frozenset()).shortlist == ()
+    # ...but both appear on the board, in their canonical sectors.
+    board = {p.sector: p.row.ticker for p in sector_board(rows, ScoutCriteria(), frozenset())}
+    assert board == {"Financial Services": "BANK", "Utilities": "UTIL"}
+
+
+def test_sector_board_caps_per_sector_and_excludes_claimed():
+    rows = [
+        make_row(ticker=f"T{i}", sector="Technology Services", fwd_pe=10.0 + i,
+                 revenue_growth_ttm_pct=20.0)
+        for i in range(5)
+    ]
+    board = sector_board(rows, ScoutCriteria(), frozenset(), per_sector=3)
+    assert [p.row.ticker for p in board] == ["T0", "T1", "T2"]  # cheapest-for-growth, capped at 3
+    # A claimed ticker (already proposed elsewhere) is dropped from the board.
+    board2 = sector_board(rows, ScoutCriteria(), exclude={"T0"}, per_sector=3)
+    assert [p.row.ticker for p in board2] == ["T1", "T2", "T3"]
+
+
+def test_sector_board_drops_shrinking_and_trap_names():
+    rows = [
+        make_row(ticker="SHRINK", sector="Technology Services", revenue_growth_ttm_pct=-5.0),
+        make_row(ticker="TRAP", sector="Technology Services", eps_growth_ttm_pct=-90.0),
+    ]
+    assert sector_board(rows, ScoutCriteria(), frozenset()) == ()  # sanity floors still bite
+
+
+def test_deterioration_flags_weakening_and_ranks_by_severity():
+    rows = [
+        make_row(ticker="HEALTHY", revenue_growth_ttm_pct=20.0, eps_growth_ttm_pct=15.0,
+                 operating_margin_pct=25.0, fwd_pe=18.0),
+        make_row(ticker="SHRINK", revenue_growth_ttm_pct=-8.0),
+        make_row(ticker="WORST", revenue_growth_ttm_pct=-15.0, eps_growth_ttm_pct=-60.0,
+                 operating_margin_pct=-10.0, fwd_pe=45.0),
+    ]
+    det = deterioration(rows, frozenset())
+    tickers = [p.row.ticker for p in det]
+    assert "HEALTHY" not in tickers  # nothing weakening
+    assert tickers[0] == "WORST"     # most flags → ranked first
+    assert det[0].rank == 1 and len(det[0].reasons) == 4
+    assert "SHRINK" in tickers
+
+
+def test_deterioration_excludes_claimed_names():
+    rows = [make_row(ticker="SHRINK", revenue_growth_ttm_pct=-8.0)]
+    assert deterioration(rows, exclude={"SHRINK"}) == ()

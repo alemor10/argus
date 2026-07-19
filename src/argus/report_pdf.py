@@ -242,6 +242,10 @@ def build_pdf(
                 report, total_details=len(subjects), shown_details=len(shown)
             ):
                 _save(pdf, page)
+            # Page 3 — the broader lenses (sector board + deterioration watch),
+            # only when the scan surfaced something for them.
+            if any(p.status in ("board", "deterioration") for p in report.scout):
+                _save(pdf, _scout_lenses_page(report))
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
     return buffer.getvalue()
@@ -484,6 +488,100 @@ def _scout_proposals_block(fig: Figure, cur: _Cursor, report: RunReport) -> None
             "coverage context only, no detail page.",
             size=8, color=_MUTED, style="italic",
         )
+
+
+def _scout_lenses_page(report: RunReport) -> Figure:
+    """Scout page 3 — the two non-quality lenses on the full scan: the sector
+    board (relative-value leaders per sector, so every sector fills) and the
+    deterioration watch (weakening fundamentals, reported as facts). Screener
+    claims, never gated or scored; rendered only when there is something to show."""
+    fig = plt.figure(figsize=_PAGE)
+    cur = _Cursor(fig)
+    cur.line(f"Argus scout — run {report.run_id}: broader lenses", size=13, weight="bold")
+    cur.gap(0.014)
+    _sector_board_block(fig, cur, report)
+    cur.gap(0.012)
+    _deterioration_block(cur, report)
+    _page_footer(fig, report)
+    return fig
+
+
+def _sector_board_block(fig: Figure, cur: _Cursor, report: RunReport) -> None:
+    from argus.scout.sectors import CANONICAL_SECTORS
+
+    board = [p for p in report.scout if p.status == "board"]
+    cur.line("Sector board — relative value by sector (screener claims)", size=11, weight="bold")
+    cur.gap(0.004)
+    if not board:
+        cur.line("No sector-board names this run.", size=9, color=_SECONDARY)
+        return
+    cur.wrapped(
+        "Cheapest-for-growth per sector from the market scan — sanity floors only, "
+        "not the quality gates, not verified, not scored. Every sector can fill.",
+        size=8, color=_MUTED, style="italic", width=120, max_lines=2,
+    )
+    cur.gap(0.006)
+    by_sector: dict[str, list[ScoutProposal]] = {}
+    for p in board:
+        by_sector.setdefault(p.sector, []).append(p)
+    columns = ["Ticker", "Fwd P/E", "Rev growth", "ROE", "Gross m.", "Market cap"]
+    widths = [0.20, 0.15, 0.17, 0.13, 0.18, 0.17]
+    rows: list[list[str]] = []
+    bands: set[int] = set()
+    for sector in CANONICAL_SECTORS:
+        picks = sorted(by_sector.get(sector, []), key=lambda p: p.rank)
+        if not picks:
+            continue
+        bands.add(len(rows))
+        rows.append([_clip(sector, 40)] + [""] * (len(columns) - 1))
+        for p in picks:
+            m = p.screener_metrics or {}
+            rows.append(
+                [
+                    _clip(p.ticker, 10),
+                    _claim_num(m.get("fwd_pe"), "{:.1f}"),
+                    _claim_num(m.get("revenue_growth_ttm_pct"), "{:+.1f}%"),
+                    _claim_num(m.get("roe_pct"), "{:.1f}%"),
+                    _claim_num(m.get("gross_margin_pct"), "{:.1f}%"),
+                    _claim_num(m.get("market_cap"), "cap"),
+                ]
+            )
+    _table(fig, cur, columns, rows, widths, band_rows=frozenset(bands))
+
+
+def _deterioration_block(cur: _Cursor, report: RunReport) -> None:
+    det = [p for p in report.scout if p.status == "deterioration"]
+    cur.line(
+        "Deterioration watch — weakening fundamentals (screener claims)",
+        size=11, weight="bold",
+    )
+    cur.gap(0.004)
+    if not det:
+        cur.line("No names flagged deteriorating this run.", size=9, color=_SECONDARY)
+        return
+    cur.wrapped(
+        "Factual signs of weakening fundamentals from the scan — reported as DATA, "
+        "not a forecast, recommendation, or trade signal. Never gated, never scored; "
+        "the human decides.",
+        size=8, color=_MUTED, style="italic", width=120, max_lines=2,
+    )
+    cur.gap(0.006)
+    for p in sorted(det, key=lambda p: p.rank):
+        if cur.y < _PAGE_FLOOR + 0.02:
+            cur.line("… more in the markdown digest.", size=8, color=_MUTED)
+            break
+        flags = "; ".join(p.screen_reasons.values())
+        sector = f" · {p.sector}" if p.sector else ""
+        cur.line(_clip(f"{p.ticker}{sector} — {flags}", 118), size=8.5, color=_INK)
+
+
+def _claim_num(value: object, fmt: str) -> str:
+    """A screener-claim number formatted, or '—'. `fmt` of 'cap' humanizes a
+    dollar magnitude; otherwise it is a str.format template."""
+    if not _finite(value):
+        return "—"
+    number = float(value)  # type: ignore[arg-type]
+    return _humanize_cap(number) if fmt == "cap" else fmt.format(number)
 
 
 def _new_this_week_line(cur: _Cursor, proposed: Sequence[ScoutProposal]) -> None:

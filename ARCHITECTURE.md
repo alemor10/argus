@@ -622,6 +622,21 @@ Scout finds candidates; the human decides. Weekly flow:
    sector is information, never padded). Each proposal also carries
    **peer context** from the same scan: same-industry median forward P/E
    and the largest peers, labeled as claims.
+
+   **Broader lenses (v1.19)** — the scan pulls the whole market and the
+   quality screen keeps ~1%; two lenses mine the rest. The **sector board**
+   takes the top ~3 per canonical sector by within-sector forward-PEG with
+   SANITY floors only (positive fwd P/E + growth + the value-trap guard) — the
+   absolute margin/ROE/leverage gates a bank, utility, or REIT can never meet
+   are dropped, so every sector fills (it generalizes the old single-leader
+   strip). The **deterioration watch** flags weakening fundamentals (shrinking
+   revenue, collapsing EPS, unprofitable operations, a stretched multiple on
+   stalled growth), reported as FACTS — never a forecast, recommendation, or
+   trade signal (the read-only / no-forecast constraint). Both are screener
+   claims (pure functions in `criteria.py`, deduped against the shortlist,
+   persisted as `scout_candidates` rows with `board`/`deterioration` status) —
+   never enriched, gated, or scored, so the graded conviction shortlist and
+   its scorecard stay pure.
 3. **Enrich + gate** — the surviving candidates become `TickerContext`s and
    run through the SAME engine (`runs.kind='scout'`) with the monitor's
    gates plus scout's stricter eligibility: a candidate whose core fields

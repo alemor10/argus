@@ -508,6 +508,29 @@ class TestScoutRun:
         second = _scout(con, sink, RUN2_AT)
         assert "No new names cleared the screen this week" in sink.digests[second.run_id]
 
+    def test_sector_board_and_deterioration_persist_and_hydrate(self, con):
+        """The two non-quality lenses land in scout_candidates with their own
+        statuses, deduped against the quality shortlist, and hydrate into both
+        the report and the digest."""
+        sink = _CaptureSink()
+        rows = [
+            _row("CLEANCO", peg=0.9),  # clears the quality screen → proposed
+            _row("BANKCO", sector="Finance", fwd_pe=11.0, gross_margin_pct=None,
+                 debt_to_equity=9.0, roe_pct=13.0, revenue_growth_ttm_pct=8.0),  # board only
+            _row("ROTCO", revenue_growth_ttm_pct=-12.0, eps_growth_ttm_pct=-60.0),  # deteriorating
+        ]
+        outcome = _scout(con, sink, RUN1_AT, rows=rows)
+        report = queries.run_report(con, outcome.run_id)
+        statuses = {p.ticker: p.status for p in report.scout}
+        assert statuses["CLEANCO"] == "proposed"
+        assert statuses["BANKCO"] == "board"        # cleared no quality gate, still surfaced
+        assert statuses["ROTCO"] == "deterioration"  # flagged weakening, not a passer
+        digest = sink.digests[outcome.run_id]
+        assert "Sector board" in digest and "BANKCO" in digest
+        assert "Deterioration watch" in digest and "ROTCO" in digest
+        # The deterioration disclaimer holds the read-only / no-forecast line.
+        assert "not a forecast, recommendation, or trade signal" in digest
+
     def test_golden_scout_digest(self, con, update_golden):
         sink = _CaptureSink()
         _scout(con, sink, RUN1_AT, price_fetcher=_synthetic_prices)

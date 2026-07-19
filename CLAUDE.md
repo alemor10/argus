@@ -150,6 +150,19 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       macro re-prints (Fed-funds-effective, delta 0) roll into the suppressed
       count instead of drowning the events section. See ARCHITECTURE.md, The
       Sunday Edition.
+- [x] Sector board + deterioration watch (v1.19, 2026-07-19): two non-quality
+      lenses on the FULL market scan Argus already pulls (and today discards
+      ~99% of). **Sector board** — top ~3 per canonical sector by within-sector
+      forward-PEG, sanity floors only (drops the margin/ROE/leverage gates a
+      bank/utility/REIT structurally can't meet), so every sector fills.
+      **Deterioration watch** — names with weakening fundamentals (shrinking
+      revenue, collapsing EPS, unprofitable ops, priced-for-gone-growth),
+      reported as FACTS, never a forecast or trade signal (the read-only /
+      no-forecast constraint holds — Argus informs, the human decides). Both
+      are screener claims — never enriched, gated, or scored — so the
+      conviction shortlist and its scorecard stay pure. New scout PDF page 3 +
+      digest sections; `scout_candidates` gains `board`/`deterioration`
+      statuses (schema v12). See ARCHITECTURE.md, Scout.
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 

@@ -605,7 +605,7 @@ class ScoutCandidateRecord(BaseModel):
 
     ticker: str
     rank: int  # global rank among all screen passers
-    status: Literal["proposed", "excluded", "leader"]
+    status: Literal["proposed", "excluded", "leader", "board", "deterioration"]
     sector: str = "Other"  # canonical (scout.sectors)
     exclusion_reason: str | None = None
     screen_reasons: dict[str, str]

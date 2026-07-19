@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -139,6 +139,30 @@ CREATE TABLE IF NOT EXISTS insider_transactions (
     first_seen_run_id INTEGER NOT NULL REFERENCES runs(run_id),
     PRIMARY KEY (ticker, accession, transaction_date, shares)
 ) WITHOUT ROWID;
+""",
+    # v1.19: scout_candidates gains the 'board' and 'deterioration' statuses
+    # (the Sector Board + Deterioration Watch lenses on the full scan). SQLite
+    # cannot alter a CHECK, so the table is rebuilt in place (the v1.3 pattern).
+    11: """
+CREATE TABLE scout_candidates_v12 (
+    run_id           INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker           TEXT    NOT NULL,
+    rank             INTEGER NOT NULL,
+    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded','leader','board','deterioration')),
+    sector           TEXT    NOT NULL DEFAULT 'Other',
+    exclusion_reason TEXT,
+    screen_reasons   TEXT    NOT NULL,
+    screener_metrics TEXT    NOT NULL,
+    peer_context     TEXT,
+    PRIMARY KEY (run_id, ticker),
+    CHECK ((status = 'excluded') = (exclusion_reason IS NOT NULL))
+) WITHOUT ROWID;
+INSERT INTO scout_candidates_v12
+    SELECT run_id, ticker, rank, status, sector, exclusion_reason,
+           screen_reasons, screener_metrics, peer_context
+    FROM scout_candidates;
+DROP TABLE scout_candidates;
+ALTER TABLE scout_candidates_v12 RENAME TO scout_candidates;
 """,
 }
 

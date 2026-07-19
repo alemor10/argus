@@ -15,6 +15,14 @@ _'#' is the global screen rank; gaps are names excluded after enrichment or sect
 Screen (screener claims, verified independently above):
 - **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30% · vs industry median fwd P/E 15 (Widgets, n=3)
 
+## Sector board (screener claims — relative value per sector)
+
+No sector-board names this run.
+
+## Deterioration watch (screener claims — weakening fundamentals)
+
+No names flagged deteriorating this run.
+
 ## Scorecard — how past proposals have done vs SPY
 
 | First proposed | Names | Median return | SPY | Median α | Beat SPY |

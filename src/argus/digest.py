@@ -91,6 +91,8 @@ def render(report: RunReport) -> str:
         sections = (
             _header(report),
             _proposals_section(report),
+            _sector_board_section(report),
+            _deterioration_section(report),
             _scorecard_section(report),
             _scout_exclusions_section(report),
             _quarantine_section(tickers),
@@ -307,6 +309,69 @@ def _scorecard_section(report: RunReport) -> list[str]:
 
 def _pct(fraction: float) -> str:
     return f"{fraction * 100:+.1f}%"
+
+
+def _sector_board_section(report: RunReport) -> list[str]:
+    """Relative-value breadth: the cheapest-for-growth names in EACH sector,
+    from the market scan — a looser lens than the quality shortlist, so every
+    sector (banks, utilities, REITs) can fill. Screener claims, never gated or
+    scored."""
+    board = [p for p in report.scout if p.status == "board"]
+    lines = ["## Sector board (screener claims — relative value per sector)", ""]
+    if not board:
+        lines.append("No sector-board names this run.")
+        return lines
+    from argus.scout.sectors import CANONICAL_SECTORS
+
+    by_sector: dict[str, list] = {}
+    for p in board:
+        by_sector.setdefault(p.sector, []).append(p)
+    for sector in CANONICAL_SECTORS:
+        picks = sorted(by_sector.get(sector, []), key=lambda p: p.rank)
+        if picks:
+            lines.append(f"- **{_cell(sector)}:** " + " · ".join(_board_pick(p) for p in picks))
+    lines += [
+        "",
+        "_Top names per sector by forward P/E per point of revenue growth "
+        "(cheap-for-growth), from the market scan — sanity floors only, NOT the "
+        "quality gates, NOT verified, NOT scored. Breadth context beside the "
+        "graded shortlist, never a recommendation._",
+    ]
+    return lines
+
+
+def _board_pick(p) -> str:
+    metrics = p.screener_metrics or {}
+    detail = []
+    fwd = metrics.get("fwd_pe")
+    if _finite_number(fwd):
+        detail.append(f"fwd P/E {fwd:.1f}")
+    growth = metrics.get("revenue_growth_ttm_pct")
+    if _finite_number(growth):
+        detail.append(f"{growth:+.0f}% gr")
+    return f"{_cell(p.ticker)} ({', '.join(detail)})" if detail else _cell(p.ticker)
+
+
+def _deterioration_section(report: RunReport) -> list[str]:
+    """Names whose fundamentals are visibly WEAKENING in the scan — reported as
+    FACTS, never a forecast, recommendation, or trade signal (the hard
+    constraint: Argus informs, the human decides). Never gated, never scored."""
+    det = [p for p in report.scout if p.status == "deterioration"]
+    lines = ["## Deterioration watch (screener claims — weakening fundamentals)", ""]
+    if not det:
+        lines.append("No names flagged deteriorating this run.")
+        return lines
+    for p in sorted(det, key=lambda p: p.rank):
+        flags = _cell("; ".join(p.screen_reasons.values()))
+        sector = f" ({_cell(p.sector)})" if p.sector else ""
+        lines.append(f"- **{_cell(p.ticker)}**{sector}: {flags}")
+    lines += [
+        "",
+        "_Factual signs of weakening fundamentals from the market scan — "
+        "reported as DATA, not a forecast, recommendation, or trade signal. "
+        "Never gated, never scored. The human decides what it means._",
+    ]
+    return lines
 
 
 def _scout_exclusions_section(report: RunReport) -> list[str]:

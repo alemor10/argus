@@ -18,7 +18,14 @@ from argus.digest import DeliveryError, DigestSink, render
 from argus.fields import Field
 from argus.gates import GateProfile
 from argus.models import ScoutCandidateRecord, TickerContext
-from argus.scout.criteria import ScoutCriteria, ScreenedCandidate, house_symbol, screen
+from argus.scout.criteria import (
+    ScoutCriteria,
+    ScreenedCandidate,
+    deterioration,
+    house_symbol,
+    screen,
+    sector_board,
+)
 from argus.scout.screener import Screener, ScreenerError
 from argus.sources.base import DataSource
 from argus.store import queries, writer
@@ -73,6 +80,15 @@ def run_scout(
         if symbol not in unique:
             leader_map.setdefault(symbol, leader)
     leaders = list(leader_map.values())
+    # Two non-quality lenses on the FULL scan (v1.19), deduped against the
+    # shortlist/leaders (and against each other) so no ticker collides on the
+    # per-run primary key: deterioration first (a warning outranks "cheap for
+    # its sector"), then the sector board fills the rest. Screener claims only.
+    claimed = {house_symbol(c.row.ticker) for c in candidates}
+    claimed |= {house_symbol(leader.row.ticker) for leader in leaders}
+    det_picks = deterioration(rows, exclude=set(exclude) | claimed)
+    claimed |= {house_symbol(p.row.ticker) for p in det_picks}
+    board_picks = sector_board(rows, criteria, exclude=set(exclude) | claimed)
     peer_contexts = {
         house_symbol(c.row.ticker): _peer_context(c.row, rows) for c in candidates
     }
@@ -93,7 +109,25 @@ def run_scout(
             )
             for leader in leaders
         ]
-        writer.write_scout_candidates(con_, run_id=run_id, records=records)
+        records += [
+            ScoutCandidateRecord(
+                ticker=house_symbol(pick.row.ticker),
+                rank=pick.rank,
+                status=status,
+                sector=pick.sector,
+                screen_reasons=pick.reasons,
+                screener_metrics=pick.row.model_dump(),
+            )
+            for status, picks in (("deterioration", det_picks), ("board", board_picks))
+            for pick in picks
+        ]
+        # Final safety net against the per-run PK: keep the first record per
+        # canonical ticker (verdicts, then leaders, then deterioration, then
+        # board — the priority already encoded in append order). The lenses are
+        # deduped upstream; a dot/dash collision inside one lens is caught here.
+        seen: set[str] = set()
+        deduped = [r for r in records if not (r.ticker in seen or seen.add(r.ticker))]
+        writer.write_scout_candidates(con_, run_id=run_id, records=deduped)
         _score_past_proposals(con_, run_id, today, price_fetcher)
         if skipped:
             # The screener dropped rows it could not identify — countable

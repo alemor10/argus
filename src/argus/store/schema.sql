@@ -163,7 +163,7 @@ CREATE TABLE scout_candidates (
     run_id           INTEGER NOT NULL REFERENCES runs(run_id),
     ticker           TEXT    NOT NULL,
     rank             INTEGER NOT NULL,   -- global rank among all screen passers
-    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded','leader')),
+    status           TEXT    NOT NULL CHECK (status IN ('proposed','excluded','leader','board','deterioration')),
     sector           TEXT    NOT NULL DEFAULT 'Other',  -- canonical bucket
     exclusion_reason TEXT,
     screen_reasons   TEXT    NOT NULL,   -- JSON {rule: "fwd P/E 20.4 ≤ 25", ...}

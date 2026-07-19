@@ -32,7 +32,7 @@ import yaml
 from pydantic import BaseModel, ConfigDict
 
 from argus.scout.screener import ScreenerRow
-from argus.scout.sectors import canonical_sector
+from argus.scout.sectors import CANONICAL_SECTORS, canonical_sector
 
 
 class ScoutCriteria(BaseModel):
@@ -234,6 +234,141 @@ def _value_trap(eps_growth: float | None, decline_floor: float) -> str | None:
     if eps_growth is None or eps_growth <= decline_floor:
         return None
     return f"EPS trend {eps_growth:+.1f}% > {_fmt(decline_floor)}%"
+
+
+# --- Non-quality lenses on the FULL scan (v1.19) ------------------------------
+# The quality screen surfaces only names clearing every rule; these two lenses
+# mine the rest of the scan Argus already paid for. Screener claims only — never
+# enriched, never gated, never scored. Deterioration reports FACTS about
+# weakening fundamentals; it is NOT a forecast or a trade signal (the hard
+# constraint holds — Argus reports data, the human decides).
+
+
+class ScannedPick(BaseModel):
+    """One name surfaced from the full scan by a non-quality lens (the sector
+    board or the deterioration watch): the raw screener row (labeled claims),
+    its canonical sector, a within-list rank, and human 'why' strings."""
+
+    model_config = ConfigDict(frozen=True)
+
+    row: ScreenerRow
+    sector: str
+    rank: int
+    reasons: dict[str, str]
+
+
+def sector_board(
+    rows: Sequence[ScreenerRow],
+    criteria: ScoutCriteria,
+    exclude: AbstractSet[str],
+    *,
+    per_sector: int = 3,
+) -> tuple[ScannedPick, ...]:
+    """Relative-value breadth: the top `per_sector` names in EACH canonical
+    sector, ranked by forward-PEG (cheap for its growth), from the full scan.
+    Only SANITY floors apply — a positive forward P/E, positive revenue growth,
+    the value-trap guard — so the absolute margin/ROE/leverage gates a bank,
+    utility, or REIT can never meet are deliberately dropped and every sector
+    can fill. Fewer than `per_sector` when a sector is genuinely thin. Screener
+    claims, never gated: the conviction shortlist stays the graded list."""
+    excluded = {_bare_symbol(t) for t in exclude}
+    by_sector: dict[str, list[ScreenerRow]] = {}
+    for row in rows:
+        if _bare_symbol(row.ticker) in excluded:
+            continue
+        if row.fwd_pe is None or not (0 < row.fwd_pe):
+            continue
+        if row.revenue_growth_ttm_pct is None or row.revenue_growth_ttm_pct <= 0:
+            continue
+        if _value_trap(row.eps_growth_ttm_pct, criteria.max_eps_decline_pct) is None:
+            continue
+        by_sector.setdefault(canonical_sector(row.sector), []).append(row)
+    picks: list[ScannedPick] = []
+    for sector in CANONICAL_SECTORS:
+        group = sorted(by_sector.get(sector, []), key=_rank_key)[: max(per_sector, 0)]
+        for rank, row in enumerate(group, start=1):
+            picks.append(
+                ScannedPick(row=row, sector=sector, rank=rank, reasons=_board_reasons(row))
+            )
+    return tuple(picks)
+
+
+def _board_reasons(row: ScreenerRow) -> dict[str, str]:
+    reasons: dict[str, str] = {}
+    if row.fwd_pe is not None and row.revenue_growth_ttm_pct:
+        reasons["fwd_peg"] = (
+            f"fwd P/E {row.fwd_pe:.1f} on {row.revenue_growth_ttm_pct:+.1f}% growth"
+        )
+    if row.roe_pct is not None:
+        reasons["roe"] = f"ROE {row.roe_pct:.1f}%"
+    if row.gross_margin_pct is not None:
+        reasons["gross_margin"] = f"gross margin {row.gross_margin_pct:.1f}%"
+    return reasons
+
+
+# Deterioration flag thresholds — factual, disclosed, never a forecast.
+_EPS_COLLAPSE_PCT = -25.0   # TTM EPS trend at/below this = collapsing earnings
+_STRETCHED_FWD_PE = 30.0    # richly valued...
+_STALLED_GROWTH_PCT = 5.0   # ...against growth this weak = priced for growth that's gone
+
+
+def deterioration(
+    rows: Sequence[ScreenerRow],
+    exclude: AbstractSet[str],
+    *,
+    top: int = 12,
+) -> tuple[ScannedPick, ...]:
+    """Names whose fundamentals are visibly WEAKENING in the scan — reported as
+    FACTS, never a forecast or a trade call. A row is flagged when any hold:
+    revenue shrinking, TTM earnings collapsing, operations unprofitable, or a
+    stretched multiple against stalled growth. Ranked by how many flags trip
+    (then by the depth of the revenue decline), most-deteriorated first, capped
+    at `top`. Screener claims, never gated, never scored."""
+    excluded = {_bare_symbol(t) for t in exclude}
+    flagged: list[ScannedPick] = []
+    for row in rows:
+        if _bare_symbol(row.ticker) in excluded:
+            continue
+        reasons = _deterioration_flags(row)
+        if reasons:
+            flagged.append(
+                ScannedPick(
+                    row=row, sector=canonical_sector(row.sector), rank=0, reasons=reasons
+                )
+            )
+    flagged.sort(
+        key=lambda p: (
+            -len(p.reasons),
+            p.row.revenue_growth_ttm_pct if p.row.revenue_growth_ttm_pct is not None else 0.0,
+            _bare_symbol(p.row.ticker),
+        )
+    )
+    return tuple(
+        pick.model_copy(update={"rank": rank})
+        for rank, pick in enumerate(flagged[: max(top, 0)], start=1)
+    )
+
+
+def _deterioration_flags(row: ScreenerRow) -> dict[str, str]:
+    """The tripped weakening flags for one row, as human claim strings — empty
+    when nothing is deteriorating."""
+    flags: dict[str, str] = {}
+    if row.revenue_growth_ttm_pct is not None and row.revenue_growth_ttm_pct < 0:
+        flags["revenue_declining"] = f"revenue {row.revenue_growth_ttm_pct:+.1f}% YoY"
+    if row.eps_growth_ttm_pct is not None and row.eps_growth_ttm_pct <= _EPS_COLLAPSE_PCT:
+        flags["earnings_collapsing"] = f"EPS trend {row.eps_growth_ttm_pct:+.1f}%"
+    if row.operating_margin_pct is not None and row.operating_margin_pct < 0:
+        flags["unprofitable_ops"] = f"operating margin {row.operating_margin_pct:.1f}%"
+    if (
+        row.fwd_pe is not None
+        and row.fwd_pe > _STRETCHED_FWD_PE
+        and row.revenue_growth_ttm_pct is not None
+        and row.revenue_growth_ttm_pct < _STALLED_GROWTH_PCT
+    ):
+        flags["priced_for_gone_growth"] = (
+            f"fwd P/E {row.fwd_pe:.1f} on {row.revenue_growth_ttm_pct:+.1f}% growth"
+        )
+    return flags
 
 
 def _rank_key(row: ScreenerRow) -> tuple[float, float, str, str]:
