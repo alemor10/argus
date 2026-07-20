@@ -125,10 +125,21 @@ def enqueue_delivery(
 ) -> int:
     """One outbox row per (publication, channel). Returns outbox_id. The
     fingerprint is a hash PREFIX of the endpoint — identity without the
-    secret."""
+    secret. Idempotent: an existing UNDELIVERED row for the same publication
+    and channel is reused (a re-run of the same Sunday edition must not stack
+    duplicate rows that a later `argus deliver` would post N times); a
+    delivered row stays as the audit record and a fresh row is created."""
     require_aware(created_at)
     if (run_id is None) == (label is None):
         raise ValueError("exactly one of run_id/label identifies a delivery")
+    key, value = ("run_id", run_id) if run_id is not None else ("label", label)
+    existing = con.execute(
+        f"SELECT outbox_id FROM delivery_outbox WHERE {key} = ? AND channel = ? "  # noqa: S608
+        "AND delivered_at IS NULL",
+        (value, channel),
+    ).fetchone()
+    if existing is not None:
+        return existing["outbox_id"]
     with con:
         cur = con.execute(
             "INSERT INTO delivery_outbox (run_id, label, channel, fingerprint, created_at) "

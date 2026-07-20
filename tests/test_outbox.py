@@ -254,3 +254,80 @@ def test_report_divergence_writes_rerender_never_overwrites(tmp_path):
         assert any(a["original"] == 0 for a in rows)  # regeneration recorded separately
     finally:
         con.close()
+
+
+def test_deliver_still_failing_marks_attempt_and_exits_nonzero(tmp_path, monkeypatch):
+    """Review finding (was a NameError): the still-failing retry path must
+    record the attempt (attempts += 1, next_retry_at set) and exit 1 — not
+    crash."""
+    _seed_failed_delivery(tmp_path, monkeypatch)
+
+    import httpx
+
+    def still_dead(*args, **kwargs):
+        raise httpx.ConnectError("still refused")
+
+    monkeypatch.setattr(httpx, "post", still_dead)
+    result = runner.invoke(app, ["deliver", "--root", str(tmp_path)])
+    assert result.exit_code == 1
+    assert "still failing" in result.output
+
+    con = connect(tmp_path / "argus.db")
+    try:
+        [row] = queries.undelivered_outbox(con)
+        assert row["attempts"] == 2  # engine's attempt + this retry
+        assert row["next_retry_at"] is not None
+    finally:
+        con.close()
+
+
+def test_deliver_scopes_by_label(tmp_path, monkeypatch):
+    """--label drains only the labeled publication's rows."""
+    monkeypatch.setenv("ARGUS_DISCORD_WEBHOOK", "https://discord.com/api/webhooks/1/xyz")
+    runner.invoke(app, ["init", "--root", str(tmp_path)])
+    con = connect(tmp_path / "argus.db")
+    try:
+        migrate(con)
+        from argus.store import writer as store_writer
+
+        store_writer.enqueue_delivery(
+            con, label="sunday-2026-07-19", channel="discord", created_at=RUN_AT
+        )
+    finally:
+        con.close()
+    # Scoped to a DIFFERENT label: nothing to do, exit 0, no post attempted.
+    result = runner.invoke(
+        app, ["deliver", "--root", str(tmp_path), "--label", "sunday-2026-07-12"]
+    )
+    assert result.exit_code == 0
+    assert "Nothing undelivered" in result.output
+    # Both scopes at once is refused.
+    both = runner.invoke(
+        app, ["deliver", "--root", str(tmp_path), "--run", "1", "--label", "x"]
+    )
+    assert both.exit_code == 1
+
+
+def test_report_adopts_differing_on_disk_original_instead_of_overwriting(tmp_path):
+    """Review finding: for a pre-artifacts (legacy) run whose on-disk file no
+    longer matches today's renderer, report --run must ADOPT the on-disk file
+    as the original and write a -rerender — never overwrite the only true
+    copy of what was delivered."""
+    runner.invoke(app, ["init", "--root", str(tmp_path)])
+    runner.invoke(app, ["watch", "--root", str(tmp_path)])
+    con = connect(tmp_path / "argus.db")
+    try:
+        con.execute("DELETE FROM artifacts")  # simulate a pre-artifacts run
+        con.commit()
+    finally:
+        con.close()
+    [md] = list((tmp_path / "reports").glob("digest-*run1.md"))
+    legacy = md.read_bytes() + b"\nlegacy renderer output\n"
+    md.write_bytes(legacy)  # the on-disk original differs from today's render
+
+    result = runner.invoke(app, ["report", "--run", "1", "--root", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "Adopted existing on-disk digest" in result.output
+    assert "DIFFERENTLY" in result.output
+    assert md.read_bytes() == legacy  # the true original survives
+    assert list((tmp_path / "reports").glob("digest-*-rerender.md"))

@@ -280,3 +280,46 @@ def test_run_lock_releases_on_exit_and_on_error(tmp_path):
             raise ValueError("boom")
     with run_lock(tmp_path):  # reacquirable after both exits
         pass
+
+
+def test_crash_mid_post_leaves_retryable_outbox_row(con):
+    """Review finding: the outbox row must exist BEFORE the network post, so a
+    crash during the post (the longest network call in publication) leaves an
+    undelivered row `argus deliver` can drain — never a delivery_pending run
+    with nothing to retry."""
+
+    class _CrashingChannel:
+        channel_name = "discord"
+        fingerprint = "deadbeef1234"
+
+        def write(self, markdown, *, run_id, as_of, attachments=()):
+            raise KeyboardInterrupt  # BaseException: escapes _write_digest
+
+    with pytest.raises(KeyboardInterrupt):
+        _run(con, gated_sink=CompositeSink(_CrashingChannel()), gate_channels=False)
+    row = con.execute(
+        "SELECT * FROM delivery_outbox WHERE delivered_at IS NULL"
+    ).fetchone()
+    assert row is not None and row["channel"] == "discord"
+    status = con.execute(
+        "SELECT publication_status FROM runs ORDER BY run_id DESC LIMIT 1"
+    ).fetchone()["publication_status"]
+    assert status == "delivery_pending"  # honest: died mid-delivery, retryable
+
+
+def test_enqueue_delivery_reuses_undelivered_row(con):
+    """Review finding: a re-run of the same labeled publication must not stack
+    duplicate outbox rows that a later deliver would post N times."""
+    first = writer.enqueue_delivery(
+        con, label="sunday-2026-07-19", channel="discord", created_at=RUN_AT
+    )
+    second = writer.enqueue_delivery(
+        con, label="sunday-2026-07-19", channel="discord", created_at=RUN_AT
+    )
+    assert first == second
+    # A DELIVERED row stays as audit; the next enqueue creates a fresh one.
+    writer.mark_delivery(con, outbox_id=first, attempted_at=RUN_AT, delivered=True)
+    third = writer.enqueue_delivery(
+        con, label="sunday-2026-07-19", channel="discord", created_at=RUN_AT
+    )
+    assert third != first

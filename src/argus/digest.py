@@ -1295,6 +1295,7 @@ def atomic_write_bytes(path: Path, data: bytes) -> None:
     import os
     import tempfile
 
+    path.parent.mkdir(parents=True, exist_ok=True)
     try:
         if path.exists() and path.read_bytes() == data:
             return

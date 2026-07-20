@@ -10,7 +10,7 @@ must not page weekly on a flaky free feed — and won't: partial data exits 0.
 
 import json
 import re
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import Enum
 from pathlib import Path
 from typing import Annotated, Optional
@@ -647,16 +647,38 @@ def report(
         )
         as_of = run_report.as_of.date()
         if original is None:
-            # Legacy run (pre-artifacts): behave as before, atomically, and
-            # start the immutability record from this regeneration.
-            path = FileDigestSink(paths.reports).write(markdown, run_id=run, as_of=as_of)
-            store_writer.record_artifact(
-                con, run_id=run, filename=path.name, kind="md", sha256=sha,
-                size=len(data), renderer=argus.__version__,
-                written_at=datetime.now(UTC),
-            )
-            typer.echo(f"Regenerated digest for run {run}: {path} (no prior artifact record)")
-        elif original["sha256"] == sha:
+            # Legacy run (pre-artifacts). If the run's file still exists on
+            # disk, ADOPT it as the original (record ITS hash) — overwriting it
+            # with today's renderer would silently destroy the only true copy
+            # of what was actually delivered. Then fall through to the normal
+            # verify-or-rerender logic against the adopted record.
+            canonical = paths.reports / f"digest-{as_of.isoformat()}-run{run}.md"
+            if canonical.exists():
+                disk = canonical.read_bytes()
+                disk_sha = hashlib.sha256(disk).hexdigest()
+                store_writer.record_artifact(
+                    con, run_id=run, filename=canonical.name, kind="md",
+                    sha256=disk_sha, size=len(disk),
+                    renderer="unknown (adopted pre-artifacts file)",
+                    written_at=datetime.now(UTC),
+                )
+                original = next(
+                    a
+                    for a in queries.artifacts_for(con, run_id=run)
+                    if a["kind"] == "md" and a["original"]
+                )
+                typer.echo(f"Adopted existing on-disk digest as run {run}'s original artifact.")
+            else:
+                path = FileDigestSink(paths.reports).write(markdown, run_id=run, as_of=as_of)
+                store_writer.record_artifact(
+                    con, run_id=run, filename=path.name, kind="md", sha256=sha,
+                    size=len(data), renderer=argus.__version__,
+                    written_at=datetime.now(UTC),
+                )
+                typer.echo(
+                    f"Regenerated digest for run {run}: {path} (no prior artifact record)"
+                )
+        if original is not None and original["sha256"] == sha:
             path = paths.reports / original["filename"]
             if not path.exists():  # restore a deleted file from the store
                 atomic_write_bytes(path, data)
@@ -664,7 +686,7 @@ def report(
                 f"Run {run} regenerates bit-for-bit (sha256 {sha[:12]}…) — original "
                 f"artifact verified: {path}"
             )
-        else:
+        elif original is not None:
             stem, dot, suffix = original["filename"].rpartition(".")
             rerender_name = f"{stem}-rerender.{suffix}" if dot else f"{original['filename']}-rerender"
             rerender_path = paths.reports / rerender_name
@@ -747,6 +769,11 @@ def scout(
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
     sink, channel_sink, gate = _compose_sinks(file_sink, channels, deliver)
+    if deliver is DeliverPolicy.EVENTS_ONLY:
+        # events-only has never been a scout concept (the digest IS the event):
+        # preserve the long-standing behavior — file record only, no channels —
+        # rather than letting the watch-side new-information gate decide.
+        channel_sink, gate = None, False
     as_of = datetime.now(UTC)
     try:
         with run_lock(paths.root):
@@ -868,8 +895,18 @@ def recap(
                         / f"argus-scout-{ending.isoformat()}-run{report.scout_run_id}.pdf"
                     )
                     if scout_pdf.exists():
+                        scout_bytes = scout_pdf.read_bytes()
                         attachments.append(
-                            Attachment(scout_pdf.name, scout_pdf.read_bytes(), "application/pdf")
+                            Attachment(scout_pdf.name, scout_bytes, "application/pdf")
+                        )
+                        # Record the riding scout PDF under the label too, so a
+                        # retry of THIS post rebuilds the complete attachment
+                        # set (it is already recorded under its own run).
+                        store_writer.record_artifact(
+                            con, label=label, filename=scout_pdf.name, kind="pdf",
+                            sha256=hashlib.sha256(scout_bytes).hexdigest(),
+                            size=len(scout_bytes),
+                            renderer=argus.__version__, written_at=datetime.now(UTC),
                         )
                 try:
                     _file_sink, channels = _build_sinks(paths)
@@ -879,12 +916,15 @@ def recap(
                 # The SAME protected delivery abstraction as watch/scout:
                 # CompositeSink is the redaction + error-aggregation boundary
                 # (a raw channel loop here once leaked webhook-bearing httpx
-                # errors into the failure echo). Every attempt lands in the
-                # delivery outbox so a failed post is retryable via
-                # `argus deliver --label sunday-...`.
+                # errors into the failure echo). Outbox rows are enqueued
+                # BEFORE the post (crash-safe) so a failed or interrupted post
+                # is retryable via `argus deliver --label sunday-YYYY-MM-DD`.
                 delivery_failure: str | None = None
                 if channels:
                     composite = CompositeSink(*channels)
+                    outbox_rows = engine._enqueue_channels(
+                        con, label=label, channel_sink=composite, at=datetime.now(UTC)
+                    )
                     try:
                         composite.write(
                             markdown,
@@ -894,18 +934,10 @@ def recap(
                         )
                     except DeliveryError as exc:  # undelivered = unseen on a headless box
                         delivery_failure = str(exc)
-                    attempted_at = datetime.now(UTC)
-                    for attempt in composite.last_attempts:
-                        outbox_id = store_writer.enqueue_delivery(
-                            con, label=label, channel=attempt.channel,
-                            fingerprint=attempt.fingerprint, created_at=attempted_at,
-                        )
-                        store_writer.mark_delivery(
-                            con, outbox_id=outbox_id, attempted_at=attempted_at,
-                            delivered=attempt.ok, error=attempt.error,
-                            next_retry_at=None if attempt.ok
-                            else attempted_at + timedelta(minutes=15),
-                        )
+                    engine._mark_channel_outcomes(
+                        con, outbox_rows=outbox_rows, channel_sink=composite,
+                        overall_error=delivery_failure, at=datetime.now(UTC),
+                    )
             finally:
                 con.close()
     except LockHeldError as exc:
@@ -923,6 +955,13 @@ def deliver(
     run: Annotated[
         Optional[int],
         typer.Option("--run", help="Retry delivery for one run only (default: everything undelivered)."),
+    ] = None,
+    label: Annotated[
+        Optional[str],
+        typer.Option(
+            "--label",
+            help="Retry one labeled publication (e.g. sunday-2026-07-19) only.",
+        ),
     ] = None,
 ) -> None:
     """Retry failed Discord deliveries from the outbox — WITHOUT re-running
@@ -945,14 +984,21 @@ def deliver(
         raise typer.Exit(1) from exc
     by_name = {getattr(c, "channel_name", type(c).__name__): c for c in channels}
     failures = 0
+    if run is not None and label is not None:
+        typer.echo("Scope by --run OR --label, not both.", err=True)
+        raise typer.Exit(1)
     try:
         with run_lock(paths.root):
             con = connect(paths.db)
             try:
                 migrate(con)
-                rows = queries.undelivered_outbox(con, run_id=run)
+                rows = queries.undelivered_outbox(con, run_id=run, label=label)
                 if not rows:
-                    scope = f"run {run}" if run is not None else "the outbox"
+                    scope = (
+                        f"run {run}" if run is not None
+                        else label if label is not None
+                        else "the outbox"
+                    )
                     typer.echo(f"Nothing undelivered in {scope}.")
                     raise typer.Exit(0)
                 for row in rows:
@@ -964,6 +1010,10 @@ def deliver(
                     ident = (
                         f"run {row['run_id']}" if row["run_id"] is not None else row["label"]
                     )
+                    # The publication date is always shown: a blanket deliver
+                    # can drain OLD failed rows, and re-posting stale content
+                    # should be a visible, deliberate act.
+                    ident += f" of {row['created_at'][:10]}"
                     channel = by_name.get(row["channel"])
                     if channel is None:
                         typer.echo(
@@ -1061,7 +1111,8 @@ def _load_verified_artifacts(paths: Paths, artifacts, hashlib_mod):
 
 def _outbox_post_identity(con, row):
     """(as_of date, run_id-for-the-post) recovered from the run row or the
-    label — what the original post would have carried."""
+    label — what the original post would have carried. A label that does not
+    parse falls back to the row's created_at date (never a crash mid-drain)."""
     from datetime import date as date_
 
     if row["run_id"] is not None:
@@ -1069,8 +1120,10 @@ def _outbox_post_identity(con, row):
             "SELECT started_at FROM runs WHERE run_id = ?", (row["run_id"],)
         ).fetchone()["started_at"]
         return datetime.fromisoformat(started).date(), row["run_id"]
-    # label: 'sunday-YYYY-MM-DD'
-    return date_.fromisoformat(row["label"].removeprefix("sunday-")), 0
+    try:  # label: 'sunday-YYYY-MM-DD'
+        return date_.fromisoformat(row["label"].removeprefix("sunday-")), 0
+    except ValueError:
+        return datetime.fromisoformat(row["created_at"]).date(), 0
 
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")

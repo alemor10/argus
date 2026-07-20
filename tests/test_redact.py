@@ -52,3 +52,17 @@ def test_delivery_failure_string_is_redacted_at_the_sink():
         CompositeSink(_LeakySink()).write("x", run_id=1, as_of=__import__("datetime").date(2026, 7, 20))
     assert "verysecretwebhooktoken" not in str(excinfo.value)
     assert "REDACTED" in str(excinfo.value)
+
+
+def test_discord_subdomain_and_scheme_variants_are_redacted():
+    """Review finding: canary./ptb. subdomains issue fully functional webhooks
+    and an http:// typo still carries the secret — all must scrub."""
+    for url in (
+        "https://canary.discord.com/api/webhooks/123/SECRETTOKEN",
+        "https://ptb.discord.com/api/webhooks/123/SECRETTOKEN",
+        "http://discord.com/api/webhooks/123/SECRETTOKEN",
+        "https://discordapp.com/api/webhooks/123/SECRETTOKEN",
+    ):
+        out = redact(f"POST {url} failed")
+        assert "SECRETTOKEN" not in out, url
+        assert "REDACTED" in out, url

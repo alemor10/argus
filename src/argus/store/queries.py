@@ -52,16 +52,25 @@ def artifacts_for(
 
 
 def undelivered_outbox(
-    con: sqlite3.Connection, *, run_id: int | None = None
+    con: sqlite3.Connection, *, run_id: int | None = None, label: str | None = None
 ) -> list[sqlite3.Row]:
-    """Outbox rows never successfully delivered — `argus deliver`'s worklist.
-    delivered_at IS NULL is the whole predicate: a delivered row is never
-    retried (idempotence), a failed row always remains visible."""
+    """Outbox rows never successfully delivered — `argus deliver`'s worklist,
+    optionally scoped to one run or one labeled publication. delivered_at IS
+    NULL is the whole predicate: a delivered row is never retried
+    (idempotence), a failed row always remains visible."""
+    if run_id is not None and label is not None:
+        raise ValueError("scope by run_id OR label, not both")
     if run_id is not None:
         return con.execute(
             "SELECT * FROM delivery_outbox WHERE delivered_at IS NULL AND run_id = ? "
             "ORDER BY outbox_id",
             (run_id,),
+        ).fetchall()
+    if label is not None:
+        return con.execute(
+            "SELECT * FROM delivery_outbox WHERE delivered_at IS NULL AND label = ? "
+            "ORDER BY outbox_id",
+            (label,),
         ).fetchall()
     return con.execute(
         "SELECT * FROM delivery_outbox WHERE delivered_at IS NULL ORDER BY outbox_id"

@@ -381,15 +381,32 @@ def _outage_run(
             con, run_id=run_id, status="artifact_failed", at=now(), error=delivery_error
         )
     else:
+        # Same bookkeeping as engine.run: the artifact record makes the run
+        # verifiable, and the outbox rows (enqueued BEFORE the attempt) make a
+        # failed or crashed post retryable via `argus deliver`.
+        engine._record_artifacts(
+            con, run_id=run_id, digest_path=digest_path, markdown=markdown,
+            attachments=(), app_version=app_version, at=now(),
+        )
         writer.mark_publication(con, run_id=run_id, status="artifact_committed", at=now())
         if gated_sink is not None:
             writer.mark_publication(con, run_id=run_id, status="delivery_pending", at=now())
+            outbox_rows = engine._enqueue_channels(
+                con, run_id=run_id, channel_sink=gated_sink, at=now()
+            )
+            gated_error: str | None = None
             try:
                 gated_sink.write(markdown, run_id=run_id, as_of=as_of.date())
             except DeliveryError as exc:
-                delivery_error = str(exc)
+                gated_error = str(exc)
+            engine._mark_channel_outcomes(
+                con, outbox_rows=outbox_rows, channel_sink=gated_sink,
+                overall_error=gated_error, at=now(),
+            )
+            if gated_error is not None:
+                delivery_error = gated_error
                 writer.mark_publication(
-                    con, run_id=run_id, status="delivery_failed", at=now(), error=delivery_error
+                    con, run_id=run_id, status="delivery_failed", at=now(), error=gated_error
                 )
             else:
                 writer.mark_publication(con, run_id=run_id, status="delivered", at=now())

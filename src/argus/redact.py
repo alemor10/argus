@@ -13,9 +13,19 @@ import re
 _PATTERNS: tuple[tuple[re.Pattern[str], str], ...] = (
     # ?token=…  /  &api_key=…  /  key=…  query params (secret is the value)
     (re.compile(r'((?:token|api[_-]?key|key|secret)=)[^&\s"\'<>]+', re.IGNORECASE), r"\1REDACTED"),
-    # Discord/Slack webhook URLs — the path IS the credential.
-    (re.compile(r"(https://discord(?:app)?\.com/api/webhooks/)\S+", re.IGNORECASE), r"\1REDACTED"),
-    (re.compile(r"(https://hooks\.slack\.com/services/)\S+", re.IGNORECASE), r"\1REDACTED"),
+    # Discord/Slack webhook URLs — the path IS the credential. Any scheme and
+    # any subdomain (canary.discord.com / ptb.discord.com issue fully
+    # functional webhooks; an http:// typo still carries the secret).
+    (
+        re.compile(
+            r"(https?://(?:[\w-]+\.)*discord(?:app)?\.com/api/webhooks/)\S+", re.IGNORECASE
+        ),
+        r"\1REDACTED",
+    ),
+    (
+        re.compile(r"(https?://(?:[\w-]+\.)*slack\.com/services/)\S+", re.IGNORECASE),
+        r"\1REDACTED",
+    ),
 )
 
 

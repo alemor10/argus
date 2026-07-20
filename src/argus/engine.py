@@ -166,37 +166,56 @@ def _record_artifacts(
         )
 
 
-def _record_outbox(
+def _enqueue_channels(
     con: sqlite3.Connection,
     *,
-    run_id: int,
     channel_sink: DigestSink,
-    gated_error: str | None,
+    at: datetime,
+    run_id: int | None = None,
+    label: str | None = None,
+) -> list[tuple[str, int]]:
+    """Enqueue one outbox row per channel BEFORE the delivery attempt — the
+    standard outbox pattern: a crash mid-post (the longest network call in the
+    publication phase) leaves undelivered rows that `argus deliver` can drain,
+    never a delivery_pending run with nothing to retry. Returns
+    [(channel, outbox_id)] in sink order."""
+    sinks = getattr(channel_sink, "sinks", None) or (channel_sink,)
+    rows: list[tuple[str, int]] = []
+    for sink in sinks:
+        channel = getattr(sink, "channel_name", type(sink).__name__)
+        outbox_id = writer.enqueue_delivery(
+            con, run_id=run_id, label=label, channel=channel,
+            fingerprint=getattr(sink, "fingerprint", None), created_at=at,
+        )
+        rows.append((channel, outbox_id))
+    return rows
+
+
+def _mark_channel_outcomes(
+    con: sqlite3.Connection,
+    *,
+    outbox_rows: Sequence[tuple[str, int]],
+    channel_sink: DigestSink,
+    overall_error: str | None,
     at: datetime,
 ) -> None:
-    """One outbox row per attempted channel, from CompositeSink's per-sink
-    attempt log; a non-composite sink (test stub) gets a single synthesized
-    row. delivered_at set on success = the idempotence anchor for retries."""
+    """Record each channel's outcome against its pre-created outbox row.
+    CompositeSink exposes per-sink outcomes in write order (matching the
+    enqueue order); a non-composite sink falls back to the overall outcome."""
     attempts = getattr(channel_sink, "last_attempts", None)
-    if not attempts:
-        channel = getattr(channel_sink, "channel_name", type(channel_sink).__name__)
-        outbox_id = writer.enqueue_delivery(
-            con, run_id=run_id, channel=channel,
-            fingerprint=getattr(channel_sink, "fingerprint", None), created_at=at,
-        )
+    per_channel = (
+        attempts
+        if attempts is not None and len(attempts) == len(outbox_rows)
+        else None
+    )
+    for index, (_channel, outbox_id) in enumerate(outbox_rows):
+        if per_channel is not None:
+            ok, error = per_channel[index].ok, per_channel[index].error
+        else:
+            ok, error = overall_error is None, overall_error
         writer.mark_delivery(
-            con, outbox_id=outbox_id, attempted_at=at, delivered=gated_error is None,
-            error=gated_error, next_retry_at=None if gated_error is None else at + _RETRY_DELAY,
-        )
-        return
-    for attempt in attempts:
-        outbox_id = writer.enqueue_delivery(
-            con, run_id=run_id, channel=attempt.channel,
-            fingerprint=attempt.fingerprint, created_at=at,
-        )
-        writer.mark_delivery(
-            con, outbox_id=outbox_id, attempted_at=at, delivered=attempt.ok,
-            error=attempt.error, next_retry_at=None if attempt.ok else at + _RETRY_DELAY,
+            con, outbox_id=outbox_id, attempted_at=at, delivered=ok,
+            error=error, next_retry_at=None if ok else at + _RETRY_DELAY,
         )
 
 
@@ -450,11 +469,15 @@ def run(
             writer.mark_publication(con, run_id=run_id, status="artifact_committed", at=now())
         if deliver_channels and artifact_error is None:
             writer.mark_publication(con, run_id=run_id, status="delivery_pending", at=now())
+            outbox_rows = _enqueue_channels(
+                con, run_id=run_id, channel_sink=gated_sink, at=now()
+            )
             gated_path, gated_error = _write_digest(
                 gated_sink, markdown, run_id=run_id, as_of=as_of, attachments=attachments
             )
-            _record_outbox(
-                con, run_id=run_id, channel_sink=gated_sink, gated_error=gated_error, at=now()
+            _mark_channel_outcomes(
+                con, outbox_rows=outbox_rows, channel_sink=gated_sink,
+                overall_error=gated_error, at=now(),
             )
             if digest_path is None:
                 digest_path = gated_path
