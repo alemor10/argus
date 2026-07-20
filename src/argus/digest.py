@@ -343,9 +343,15 @@ def _sector_board_section(report: RunReport) -> list[str]:
 def _board_pick(p) -> str:
     metrics = p.screener_metrics or {}
     detail = []
+    price = metrics.get("close")
+    if _finite_number(price):
+        detail.append(f"{price:.2f}")
     fwd = metrics.get("fwd_pe")
     if _finite_number(fwd):
         detail.append(f"fwd P/E {fwd:.1f}")
+    peg = metrics.get("peg_ttm")
+    if _finite_number(peg):
+        detail.append(f"PEG {peg:.2f}")
     growth = metrics.get("revenue_growth_ttm_pct")
     if _finite_number(growth):
         detail.append(f"{growth:+.0f}% gr")

@@ -524,8 +524,11 @@ def _sector_board_block(fig: Figure, cur: _Cursor, report: RunReport) -> None:
     by_sector: dict[str, list[ScoutProposal]] = {}
     for p in board:
         by_sector.setdefault(p.sector, []).append(p)
-    columns = ["Ticker", "Fwd P/E", "Rev growth", "ROE", "Gross m.", "Market cap"]
-    widths = [0.20, 0.15, 0.17, 0.13, 0.18, 0.17]
+    # Columns that populate across ALL sectors — gross margin/ROE are null for
+    # banks/utilities/REITs (the very sectors this lens exists to show), so the
+    # readings here are price, valuation, growth, leverage, and size instead.
+    columns = ["Ticker", "Price", "Fwd P/E", "PEG", "Rev growth", "D/E", "Market cap"]
+    widths = [0.16, 0.14, 0.14, 0.12, 0.16, 0.11, 0.17]
     rows: list[list[str]] = []
     bands: set[int] = set()
     for sector in CANONICAL_SECTORS:
@@ -539,10 +542,11 @@ def _sector_board_block(fig: Figure, cur: _Cursor, report: RunReport) -> None:
             rows.append(
                 [
                     _clip(p.ticker, 10),
+                    _claim_num(m.get("close"), "{:.2f}"),
                     _claim_num(m.get("fwd_pe"), "{:.1f}"),
+                    _claim_num(m.get("peg_ttm"), "{:.2f}"),
                     _claim_num(m.get("revenue_growth_ttm_pct"), "{:+.1f}%"),
-                    _claim_num(m.get("roe_pct"), "{:.1f}%"),
-                    _claim_num(m.get("gross_margin_pct"), "{:.1f}%"),
+                    _claim_num(m.get("debt_to_equity"), "{:.2f}"),
                     _claim_num(m.get("market_cap"), "cap"),
                 ]
             )
