@@ -37,6 +37,37 @@ from argus.models import (
 )
 
 
+def artifacts_for(
+    con: sqlite3.Connection, *, run_id: int | None = None, label: str | None = None
+) -> list[sqlite3.Row]:
+    """The immutability records for one publication (a run or a labeled
+    edition), originals first."""
+    if (run_id is None) == (label is None):
+        raise ValueError("exactly one of run_id/label identifies a publication")
+    key, value = ("run_id", run_id) if run_id is not None else ("label", label)
+    return con.execute(
+        f"SELECT * FROM artifacts WHERE {key} = ? ORDER BY original DESC, filename",  # noqa: S608
+        (value,),
+    ).fetchall()
+
+
+def undelivered_outbox(
+    con: sqlite3.Connection, *, run_id: int | None = None
+) -> list[sqlite3.Row]:
+    """Outbox rows never successfully delivered — `argus deliver`'s worklist.
+    delivered_at IS NULL is the whole predicate: a delivered row is never
+    retried (idempotence), a failed row always remains visible."""
+    if run_id is not None:
+        return con.execute(
+            "SELECT * FROM delivery_outbox WHERE delivered_at IS NULL AND run_id = ? "
+            "ORDER BY outbox_id",
+            (run_id,),
+        ).fetchall()
+    return con.execute(
+        "SELECT * FROM delivery_outbox WHERE delivered_at IS NULL ORDER BY outbox_id"
+    ).fetchall()
+
+
 def baseline_run(con: sqlite3.Connection, ticker: str, before_run: int) -> int | None:
     """Latest prior watch run where this ticker has status ok/partial.
     Per-ticker, so failed and crashed runs are never diffed against:

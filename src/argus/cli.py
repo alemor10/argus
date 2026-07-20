@@ -612,7 +612,16 @@ def report(
     run: Annotated[int, typer.Option("--run", help="Run ID to regenerate the digest for.")],
     root: RootOpt = None,
 ) -> None:
-    """Regenerate the digest for a past run, bit-for-bit, from the store."""
+    """Regenerate the digest for a past run from the store and VERIFY it
+    against the recorded original artifact. A byte-identical regeneration
+    confirms reproducibility and leaves the original untouched; a divergent
+    one (renderer upgraded since) is written to a separately-named
+    '-rerender' file — history is never overwritten."""
+    import hashlib
+
+    from argus.digest import atomic_write_bytes
+    from argus.store import writer as store_writer
+
     paths = resolve_paths(root)
     if not paths.db.exists():
         typer.echo(f"No database at {paths.db} — nothing to report on.", err=True)
@@ -625,12 +634,54 @@ def report(
         except ValueError as exc:
             typer.echo(f"Cannot report on run {run}: {exc}", err=True)
             raise typer.Exit(1) from exc
+        markdown = render(run_report)
+        data = markdown.encode("utf-8")
+        sha = hashlib.sha256(data).hexdigest()
+        original = next(
+            (
+                a
+                for a in queries.artifacts_for(con, run_id=run)
+                if a["kind"] == "md" and a["original"]
+            ),
+            None,
+        )
+        as_of = run_report.as_of.date()
+        if original is None:
+            # Legacy run (pre-artifacts): behave as before, atomically, and
+            # start the immutability record from this regeneration.
+            path = FileDigestSink(paths.reports).write(markdown, run_id=run, as_of=as_of)
+            store_writer.record_artifact(
+                con, run_id=run, filename=path.name, kind="md", sha256=sha,
+                size=len(data), renderer=argus.__version__,
+                written_at=datetime.now(UTC),
+            )
+            typer.echo(f"Regenerated digest for run {run}: {path} (no prior artifact record)")
+        elif original["sha256"] == sha:
+            path = paths.reports / original["filename"]
+            if not path.exists():  # restore a deleted file from the store
+                atomic_write_bytes(path, data)
+            typer.echo(
+                f"Run {run} regenerates bit-for-bit (sha256 {sha[:12]}…) — original "
+                f"artifact verified: {path}"
+            )
+        else:
+            stem, dot, suffix = original["filename"].rpartition(".")
+            rerender_name = f"{stem}-rerender.{suffix}" if dot else f"{original['filename']}-rerender"
+            rerender_path = paths.reports / rerender_name
+            atomic_write_bytes(rerender_path, data)
+            store_writer.record_artifact(
+                con, run_id=run, filename=rerender_name, kind="md", sha256=sha,
+                size=len(data), renderer=argus.__version__,
+                written_at=datetime.now(UTC), original=False,
+            )
+            typer.echo(
+                f"Run {run} regenerated DIFFERENTLY from the original artifact "
+                f"(recorded sha {original['sha256'][:12]}… by {original['renderer']}, "
+                f"regenerated sha {sha[:12]}… by {argus.__version__}). Original left "
+                f"untouched; regeneration written to {rerender_path}."
+            )
     finally:
         con.close()
-    path = FileDigestSink(paths.reports).write(
-        render(run_report), run_id=run, as_of=run_report.as_of.date()
-    )
-    typer.echo(f"Regenerated digest for run {run}: {path}")
 
 
 @app.command()
@@ -774,52 +825,252 @@ def recap(
     else:
         note = "week-ahead calendar not configured (FINNHUB_API_KEY / bellwethers)."
 
-    con = connect(paths.db)
+    import hashlib
+
+    from argus.digest import atomic_write_bytes
+    from argus.store import writer as store_writer
+
+    label = f"sunday-{ending.isoformat()}"
     try:
-        migrate(con)
-        report = build_recap(con, week_ending=ending, week_ahead=week_ahead, week_ahead_note=note)
-    finally:
-        con.close()
-    markdown = render_recap(report)
-    pdf = build_recap_pdf(report)
+        with run_lock(paths.root):
+            con = connect(paths.db)
+            try:
+                migrate(con)
+                report = build_recap(
+                    con, week_ending=ending, week_ahead=week_ahead, week_ahead_note=note
+                )
+                markdown = render_recap(report)
+                pdf = build_recap_pdf(report)
 
-    paths.reports.mkdir(parents=True, exist_ok=True)
-    md_path = paths.reports / f"sunday-edition-{ending.isoformat()}.md"
-    md_path.write_text(markdown, encoding="utf-8")
-    pdf_name = f"argus-sunday-edition-{ending.isoformat()}.pdf"
-    (paths.reports / pdf_name).write_bytes(pdf)
+                paths.reports.mkdir(parents=True, exist_ok=True)
+                md_path = paths.reports / f"sunday-edition-{ending.isoformat()}.md"
+                atomic_write_bytes(md_path, markdown.encode("utf-8"))
+                pdf_name = f"argus-sunday-edition-{ending.isoformat()}.pdf"
+                atomic_write_bytes(paths.reports / pdf_name, pdf)
+                written_at = datetime.now(UTC)
+                store_writer.record_artifact(
+                    con, label=label, filename=md_path.name, kind="md",
+                    sha256=hashlib.sha256(markdown.encode("utf-8")).hexdigest(),
+                    size=len(markdown.encode("utf-8")),
+                    renderer=argus.__version__, written_at=written_at,
+                )
+                store_writer.record_artifact(
+                    con, label=label, filename=pdf_name, kind="pdf",
+                    sha256=hashlib.sha256(pdf).hexdigest(), size=len(pdf),
+                    renderer=argus.__version__, written_at=written_at,
+                )
 
-    attachments = [Attachment(pdf_name, pdf, "application/pdf")]
-    if report.scout_run_id is not None:
-        # One Sunday post: the edition + the morning's full scout report.
-        scout_pdf = paths.reports / f"argus-scout-{ending.isoformat()}-run{report.scout_run_id}.pdf"
-        if scout_pdf.exists():
-            attachments.append(
-                Attachment(scout_pdf.name, scout_pdf.read_bytes(), "application/pdf")
-            )
+                attachments = [Attachment(pdf_name, pdf, "application/pdf")]
+                if report.scout_run_id is not None:
+                    # One Sunday post: the edition + the morning's full scout report.
+                    scout_pdf = (
+                        paths.reports
+                        / f"argus-scout-{ending.isoformat()}-run{report.scout_run_id}.pdf"
+                    )
+                    if scout_pdf.exists():
+                        attachments.append(
+                            Attachment(scout_pdf.name, scout_pdf.read_bytes(), "application/pdf")
+                        )
+                try:
+                    _file_sink, channels = _build_sinks(paths)
+                except ValueError as exc:
+                    typer.echo(str(exc), err=True)
+                    raise typer.Exit(1) from exc
+                # The SAME protected delivery abstraction as watch/scout:
+                # CompositeSink is the redaction + error-aggregation boundary
+                # (a raw channel loop here once leaked webhook-bearing httpx
+                # errors into the failure echo). Every attempt lands in the
+                # delivery outbox so a failed post is retryable via
+                # `argus deliver --label sunday-...`.
+                delivery_failure: str | None = None
+                if channels:
+                    composite = CompositeSink(*channels)
+                    try:
+                        composite.write(
+                            markdown,
+                            run_id=report.scout_run_id or 0,
+                            as_of=ending,
+                            attachments=tuple(attachments),
+                        )
+                    except DeliveryError as exc:  # undelivered = unseen on a headless box
+                        delivery_failure = str(exc)
+                    attempted_at = datetime.now(UTC)
+                    for attempt in composite.last_attempts:
+                        outbox_id = store_writer.enqueue_delivery(
+                            con, label=label, channel=attempt.channel,
+                            fingerprint=attempt.fingerprint, created_at=attempted_at,
+                        )
+                        store_writer.mark_delivery(
+                            con, outbox_id=outbox_id, attempted_at=attempted_at,
+                            delivered=attempt.ok, error=attempt.error,
+                            next_retry_at=None if attempt.ok
+                            else attempted_at + timedelta(minutes=15),
+                        )
+            finally:
+                con.close()
+    except LockHeldError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    typer.echo(f"Sunday Edition: {md_path}")
+    if delivery_failure:
+        typer.echo(f"Edition written but NOT delivered: {delivery_failure}", err=True)
+        raise typer.Exit(1)
+
+
+@app.command()
+def deliver(
+    root: RootOpt = None,
+    run: Annotated[
+        Optional[int],
+        typer.Option("--run", help="Retry delivery for one run only (default: everything undelivered)."),
+    ] = None,
+) -> None:
+    """Retry failed Discord deliveries from the outbox — WITHOUT re-running
+    market collection. Reads the recorded artifacts from disk, verifies each
+    file still matches its recorded sha256 (a mismatched file is refused, not
+    silently sent), posts, and marks the outbox row delivered. Idempotent: a
+    row whose delivered_at is set is never re-posted."""
+    import hashlib
+
+    from argus.store import writer as store_writer
+
+    paths = resolve_paths(root)
+    if not paths.db.exists():
+        typer.echo(f"No database at {paths.db} — nothing to deliver.", err=True)
+        raise typer.Exit(1)
     try:
         _file_sink, channels = _build_sinks(paths)
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    # The SAME protected delivery abstraction as watch/scout: CompositeSink is
-    # the redaction + error-aggregation boundary (a raw channel loop here once
-    # leaked webhook-bearing httpx errors into the failure echo).
-    delivery_failure: str | None = None
-    if channels:
-        try:
-            CompositeSink(*channels).write(
-                markdown,
-                run_id=report.scout_run_id or 0,
-                as_of=ending,
-                attachments=tuple(attachments),
-            )
-        except DeliveryError as exc:  # undelivered = unseen on a headless box
-            delivery_failure = str(exc)
-    typer.echo(f"Sunday Edition: {md_path}")
-    if delivery_failure:
-        typer.echo(f"Edition written but NOT delivered: {delivery_failure}", err=True)
+    by_name = {getattr(c, "channel_name", type(c).__name__): c for c in channels}
+    failures = 0
+    try:
+        with run_lock(paths.root):
+            con = connect(paths.db)
+            try:
+                migrate(con)
+                rows = queries.undelivered_outbox(con, run_id=run)
+                if not rows:
+                    scope = f"run {run}" if run is not None else "the outbox"
+                    typer.echo(f"Nothing undelivered in {scope}.")
+                    raise typer.Exit(0)
+                for row in rows:
+                    key = (
+                        {"run_id": row["run_id"]}
+                        if row["run_id"] is not None
+                        else {"label": row["label"]}
+                    )
+                    ident = (
+                        f"run {row['run_id']}" if row["run_id"] is not None else row["label"]
+                    )
+                    channel = by_name.get(row["channel"])
+                    if channel is None:
+                        typer.echo(
+                            f"outbox #{row['outbox_id']} ({ident}): channel "
+                            f"'{row['channel']}' is not configured — skipped.",
+                            err=True,
+                        )
+                        failures += 1
+                        continue
+                    artifacts = [
+                        a for a in queries.artifacts_for(con, **key) if a["original"]
+                    ]
+                    markdown, attachments, broken = _load_verified_artifacts(
+                        paths, artifacts, hashlib
+                    )
+                    if broken:
+                        typer.echo(
+                            f"outbox #{row['outbox_id']} ({ident}): {broken} — refusing "
+                            "to send a file that no longer matches its recorded hash.",
+                            err=True,
+                        )
+                        failures += 1
+                        continue
+                    if markdown is None:
+                        typer.echo(
+                            f"outbox #{row['outbox_id']} ({ident}): no markdown artifact "
+                            "recorded — cannot rebuild the post.",
+                            err=True,
+                        )
+                        failures += 1
+                        continue
+                    as_of, post_run_id = _outbox_post_identity(con, row)
+                    attempted_at = datetime.now(UTC)
+                    try:
+                        CompositeSink(channel).write(
+                            markdown, run_id=post_run_id, as_of=as_of,
+                            attachments=tuple(attachments),
+                        )
+                    except DeliveryError as exc:
+                        store_writer.mark_delivery(
+                            con, outbox_id=row["outbox_id"], attempted_at=attempted_at,
+                            delivered=False, error=str(exc),
+                            next_retry_at=attempted_at + timedelta(minutes=15),
+                        )
+                        typer.echo(
+                            f"outbox #{row['outbox_id']} ({ident}): still failing — {exc}",
+                            err=True,
+                        )
+                        failures += 1
+                        continue
+                    store_writer.mark_delivery(
+                        con, outbox_id=row["outbox_id"], attempted_at=attempted_at,
+                        delivered=True,
+                    )
+                    if row["run_id"] is not None and not queries.undelivered_outbox(
+                        con, run_id=row["run_id"]
+                    ):
+                        store_writer.mark_publication(
+                            con, run_id=row["run_id"], status="delivered", at=attempted_at
+                        )
+                    typer.echo(f"outbox #{row['outbox_id']} ({ident}): delivered.")
+            finally:
+                con.close()
+    except LockHeldError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
+    if failures:
         raise typer.Exit(1)
+
+
+def _load_verified_artifacts(paths: Paths, artifacts, hashlib_mod):
+    """(markdown, attachments, error) — every artifact read from disk and
+    verified against its recorded sha256 before it may be re-sent."""
+    from argus.digest import Attachment
+
+    markdown = None
+    attachments = []
+    for artifact in artifacts:
+        path = paths.reports / artifact["filename"]
+        if not path.exists():
+            return None, [], f"missing artifact file {artifact['filename']}"
+        data = path.read_bytes()
+        digest = hashlib_mod.sha256(data).hexdigest()
+        if digest != artifact["sha256"]:
+            return None, [], (
+                f"artifact {artifact['filename']} has changed on disk "
+                f"(sha {digest[:12]}… != recorded {artifact['sha256'][:12]}…)"
+            )
+        if artifact["kind"] == "md":
+            markdown = data.decode("utf-8")
+        else:
+            attachments.append(Attachment(artifact["filename"], data, "application/pdf"))
+    return markdown, attachments, None
+
+
+def _outbox_post_identity(con, row):
+    """(as_of date, run_id-for-the-post) recovered from the run row or the
+    label — what the original post would have carried."""
+    from datetime import date as date_
+
+    if row["run_id"] is not None:
+        started = con.execute(
+            "SELECT started_at FROM runs WHERE run_id = ?", (row["run_id"],)
+        ).fetchone()["started_at"]
+        return datetime.fromisoformat(started).date(), row["run_id"]
+    # label: 'sunday-YYYY-MM-DD'
+    return date_.fromisoformat(row["label"].removeprefix("sunday-")), 0
 
 
 _TICKER_RE = re.compile(r"^[A-Z0-9.\-]{1,12}$")

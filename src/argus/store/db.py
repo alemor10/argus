@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 13
+SCHEMA_VERSION = 14
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -174,6 +174,44 @@ ALTER TABLE scout_candidates_v12 RENAME TO scout_candidates;
         _add_column_if_absent(con, "runs", "publication_error", "TEXT"),
         _add_column_if_absent(con, "runs", "published_at", "TEXT"),
     ),
+    # v1.21: immutable artifact records + the Discord delivery outbox. A run's
+    # artifacts are keyed (run_id, filename); the Sunday Edition has no run of
+    # its own, so both tables also accept a label ('sunday-YYYY-MM-DD') with a
+    # NULL run_id — exactly one of the two identities must be present.
+    13: """
+CREATE TABLE IF NOT EXISTS artifacts (
+    run_id     INTEGER REFERENCES runs(run_id),
+    label      TEXT,
+    filename   TEXT    NOT NULL,
+    kind       TEXT    NOT NULL CHECK (kind IN ('md','pdf')),
+    sha256     TEXT    NOT NULL,
+    bytes      INTEGER NOT NULL,
+    renderer   TEXT    NOT NULL,
+    written_at TEXT    NOT NULL,
+    original   INTEGER NOT NULL DEFAULT 1,
+    CHECK ((run_id IS NULL) != (label IS NULL))
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_run_file
+    ON artifacts (run_id, filename) WHERE run_id IS NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_label_file
+    ON artifacts (label, filename) WHERE label IS NOT NULL;
+CREATE TABLE IF NOT EXISTS delivery_outbox (
+    outbox_id     INTEGER PRIMARY KEY,
+    run_id        INTEGER REFERENCES runs(run_id),
+    label         TEXT,
+    channel       TEXT    NOT NULL,
+    fingerprint   TEXT,
+    created_at    TEXT    NOT NULL,
+    attempted_at  TEXT,
+    delivered_at  TEXT,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    next_retry_at TEXT,
+    CHECK ((run_id IS NULL) != (label IS NULL))
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_undelivered
+    ON delivery_outbox (channel) WHERE delivered_at IS NULL;
+""",
 }
 
 

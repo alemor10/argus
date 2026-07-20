@@ -1287,7 +1287,37 @@ class DigestSink(Protocol):
     ) -> Path | None: ...
 
 
+def atomic_write_bytes(path: Path, data: bytes) -> None:
+    """Write via temp file + os.replace in the same directory: a crash
+    mid-write can never leave a truncated report, and readers always see
+    either the old complete file or the new complete file. Identical content
+    already on disk is left untouched (idempotent, preserves mtime)."""
+    import os
+    import tempfile
+
+    try:
+        if path.exists() and path.read_bytes() == data:
+            return
+    except OSError:
+        pass  # unreadable existing file: replace it atomically below
+    fd, tmp = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(data)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
 class FileDigestSink:
+    channel_name = "file"
+
     def __init__(self, reports_dir: Path) -> None:
         self.reports_dir = reports_dir
 
@@ -1296,9 +1326,9 @@ class FileDigestSink:
     ) -> Path:
         self.reports_dir.mkdir(parents=True, exist_ok=True)
         path = self.reports_dir / f"digest-{as_of.isoformat()}-run{run_id}.md"
-        path.write_text(markdown, encoding="utf-8")
+        atomic_write_bytes(path, markdown.encode("utf-8"))
         for attachment in attachments:
-            (self.reports_dir / attachment.filename).write_bytes(attachment.content)
+            atomic_write_bytes(self.reports_dir / attachment.filename, attachment.content)
         return path
 
 
@@ -1308,6 +1338,8 @@ class EmailDigestSink:
     587 STARTTLS. Built for Gmail-with-app-password but any submission
     server works. Network/auth failures raise; CompositeSink turns them
     into a disclosed delivery failure rather than silence."""
+
+    channel_name = "email"
 
     def __init__(
         self,
@@ -1368,8 +1400,18 @@ class DiscordDigestSink:
     headline. HTTP failures raise; CompositeSink turns them into a disclosed
     delivery failure rather than silence."""
 
+    channel_name = "discord"
+
     def __init__(self, webhook_url: str) -> None:
         self.webhook_url = webhook_url
+
+    @property
+    def fingerprint(self) -> str:
+        """Endpoint identity WITHOUT the secret: a hash prefix of the webhook
+        URL, stable per channel, meaningless to an attacker."""
+        import hashlib
+
+        return hashlib.sha256(self.webhook_url.encode("utf-8")).hexdigest()[:12]
 
     def write(
         self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
@@ -1444,21 +1486,39 @@ class DeliveryError(RuntimeError):
         self.digest_path = digest_path
 
 
+class SinkAttempt(NamedTuple):
+    """One per-sink outcome of a CompositeSink write — the outbox's raw
+    material. `error` is already redacted."""
+
+    channel: str  # sink.channel_name, falling back to the class name
+    fingerprint: str | None  # endpoint identity without the secret
+    ok: bool
+    error: str | None
+
+
 class CompositeSink:
     """Fan a digest out to several sinks. Every sink is ATTEMPTED even when
     an earlier one fails — a broken mail server must not stop the file copy —
     then failures are raised together as DeliveryError. On a headless box an
-    undelivered digest is an unseen digest; failure must be loud."""
+    undelivered digest is an unseen digest; failure must be loud.
+
+    `last_attempts` records the per-sink outcomes of the most recent write
+    (channel name, fingerprint, ok, redacted error) — the delivery outbox
+    reads it after each channel write."""
 
     def __init__(self, *sinks: DigestSink) -> None:
         self.sinks = sinks
+        self.last_attempts: list[SinkAttempt] = []
 
     def write(
         self, markdown: str, *, run_id: int, as_of: date, attachments: Sequence[Attachment] = ()
     ) -> Path | None:
         path: Path | None = None
         failures: list[str] = []
+        self.last_attempts = []
         for sink in self.sinks:
+            channel = getattr(sink, "channel_name", type(sink).__name__)
+            fingerprint = getattr(sink, "fingerprint", None)
             try:
                 if attachments:
                     result = sink.write(
@@ -1469,8 +1529,11 @@ class CompositeSink:
             except Exception as exc:
                 # A webhook/SMTP error embeds the secret-bearing URL — scrub it
                 # before it reaches the DeliveryError, the echo, or a run note.
-                failures.append(f"{type(sink).__name__}: {redact(str(exc))}")
+                safe = f"{type(sink).__name__}: {redact(str(exc))}"
+                failures.append(safe)
+                self.last_attempts.append(SinkAttempt(channel, fingerprint, False, safe))
                 continue
+            self.last_attempts.append(SinkAttempt(channel, fingerprint, True, None))
             if path is None and result is not None:
                 path = result
         if failures:

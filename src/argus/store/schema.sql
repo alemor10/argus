@@ -249,3 +249,47 @@ CREATE TABLE change_events (
     baseline_run_id INTEGER REFERENCES runs(run_id)  -- NULL for state events
 );
 CREATE INDEX idx_events_run ON change_events (run_id);
+
+-- Immutable artifact records: the sha256 + renderer version of every report
+-- file at the moment it was written, so `argus report --run N` can VERIFY the
+-- original instead of overwriting it, and `argus deliver` can refuse to send
+-- a file that no longer matches what the run produced. A run's artifacts are
+-- keyed (run_id, filename); the Sunday Edition has no run of its own, so a
+-- label ('sunday-YYYY-MM-DD') with NULL run_id carries its rows.
+CREATE TABLE artifacts (
+    run_id     INTEGER REFERENCES runs(run_id),
+    label      TEXT,
+    filename   TEXT    NOT NULL,
+    kind       TEXT    NOT NULL CHECK (kind IN ('md','pdf')),
+    sha256     TEXT    NOT NULL,
+    bytes      INTEGER NOT NULL,
+    renderer   TEXT    NOT NULL,   -- app version (+ matplotlib for PDFs)
+    written_at TEXT    NOT NULL,
+    original   INTEGER NOT NULL DEFAULT 1,  -- 0 = a --rerender regeneration
+    CHECK ((run_id IS NULL) != (label IS NULL))
+);
+CREATE UNIQUE INDEX idx_artifacts_run_file
+    ON artifacts (run_id, filename) WHERE run_id IS NOT NULL;
+CREATE UNIQUE INDEX idx_artifacts_label_file
+    ON artifacts (label, filename) WHERE label IS NOT NULL;
+
+-- Discord delivery outbox: one row per (publication, channel) attempt group.
+-- delivered_at set = done (a retry never re-posts it — idempotence lives
+-- here, because webhooks have no idempotency keys); otherwise `argus deliver`
+-- may retry using the recorded artifacts. last_error is redacted at write.
+CREATE TABLE delivery_outbox (
+    outbox_id     INTEGER PRIMARY KEY,
+    run_id        INTEGER REFERENCES runs(run_id),
+    label         TEXT,
+    channel       TEXT    NOT NULL,   -- 'discord' | 'email' | sink class name
+    fingerprint   TEXT,               -- sha256 prefix of the endpoint, never the secret
+    created_at    TEXT    NOT NULL,
+    attempted_at  TEXT,
+    delivered_at  TEXT,
+    attempts      INTEGER NOT NULL DEFAULT 0,
+    last_error    TEXT,
+    next_retry_at TEXT,
+    CHECK ((run_id IS NULL) != (label IS NULL))
+);
+CREATE INDEX idx_outbox_undelivered
+    ON delivery_outbox (channel) WHERE delivered_at IS NULL;

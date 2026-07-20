@@ -80,6 +80,93 @@ PublicationStatus = Literal[
 ]
 
 
+def record_artifact(
+    con: sqlite3.Connection,
+    *,
+    filename: str,
+    kind: Literal["md", "pdf"],
+    sha256: str,
+    size: int,
+    renderer: str,
+    written_at: datetime,
+    run_id: int | None = None,
+    label: str | None = None,
+    original: bool = True,
+) -> None:
+    """Record one written report file: its hash, size, and renderer version at
+    the moment of writing — the immutability reference `report --run N`
+    verifies against and `argus deliver` refuses to violate. Keyed by
+    (run_id, filename) or (label, filename) for run-less publications (the
+    Sunday Edition). OR REPLACE mirrors the filesystem's own
+    overwrite-by-deterministic-filename semantics."""
+    require_aware(written_at)
+    if (run_id is None) == (label is None):
+        raise ValueError("exactly one of run_id/label identifies an artifact")
+    with con:
+        con.execute(
+            "INSERT OR REPLACE INTO artifacts "
+            "(run_id, label, filename, kind, sha256, bytes, renderer, written_at, original) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                run_id, label, filename, kind, sha256, size, renderer,
+                written_at.isoformat(), 1 if original else 0,
+            ),
+        )
+
+
+def enqueue_delivery(
+    con: sqlite3.Connection,
+    *,
+    channel: str,
+    created_at: datetime,
+    run_id: int | None = None,
+    label: str | None = None,
+    fingerprint: str | None = None,
+) -> int:
+    """One outbox row per (publication, channel). Returns outbox_id. The
+    fingerprint is a hash PREFIX of the endpoint — identity without the
+    secret."""
+    require_aware(created_at)
+    if (run_id is None) == (label is None):
+        raise ValueError("exactly one of run_id/label identifies a delivery")
+    with con:
+        cur = con.execute(
+            "INSERT INTO delivery_outbox (run_id, label, channel, fingerprint, created_at) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (run_id, label, channel, fingerprint, created_at.isoformat()),
+        )
+    assert cur.lastrowid is not None
+    return cur.lastrowid
+
+
+def mark_delivery(
+    con: sqlite3.Connection,
+    *,
+    outbox_id: int,
+    attempted_at: datetime,
+    delivered: bool,
+    error: str | None = None,
+    next_retry_at: datetime | None = None,
+) -> None:
+    """Record one delivery attempt's outcome. delivered_at set exactly once —
+    the idempotence anchor (webhooks have no idempotency keys, so `argus
+    deliver` never re-attempts a row whose delivered_at is set)."""
+    require_aware(attempted_at)
+    with con:
+        con.execute(
+            "UPDATE delivery_outbox SET attempts = attempts + 1, attempted_at = ?, "
+            "delivered_at = COALESCE(delivered_at, ?), last_error = ?, next_retry_at = ? "
+            "WHERE outbox_id = ?",
+            (
+                attempted_at.isoformat(),
+                attempted_at.isoformat() if delivered else None,
+                redact(error) if error else None,
+                next_retry_at.isoformat() if next_retry_at is not None else None,
+                outbox_id,
+            ),
+        )
+
+
 def mark_publication(
     con: sqlite3.Connection,
     *,

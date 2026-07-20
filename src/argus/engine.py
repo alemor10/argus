@@ -15,11 +15,12 @@ Flow per run (see ARCHITECTURE.md, Data flow):
           data was produced — silence is a statement)
 """
 
+import hashlib
 import sqlite3
 import time
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
@@ -119,6 +120,84 @@ def _write_digest(
     except Exception as exc:
         return None, f"{type(sink).__name__}: {redact(str(exc))}"
     return path, None
+
+
+_RETRY_DELAY = timedelta(minutes=15)
+
+
+def _record_artifacts(
+    con: sqlite3.Connection,
+    *,
+    run_id: int,
+    digest_path: Path | None,
+    markdown: str,
+    attachments: Sequence[Attachment],
+    app_version: str,
+    at: datetime,
+) -> None:
+    """Persist the immutability reference for every file this run wrote: the
+    sha256 + renderer version at write time. Skipped entirely for pathless
+    (test-stub) sinks — no file, nothing to reference."""
+    if digest_path is None:
+        return
+    data = markdown.encode("utf-8")
+    writer.record_artifact(
+        con, run_id=run_id, filename=digest_path.name, kind="md",
+        sha256=hashlib.sha256(data).hexdigest(), size=len(data),
+        renderer=app_version, written_at=at,
+    )
+    pdf_renderer = app_version
+    if any(a.mime == "application/pdf" for a in attachments):
+        try:  # the PDF is deterministic only within a matplotlib version — record it
+            import matplotlib
+
+            pdf_renderer = f"{app_version}+mpl{matplotlib.__version__}"
+        except Exception:
+            pass
+    for attachment in attachments:
+        kind: Literal["md", "pdf"] = (
+            "pdf" if attachment.mime == "application/pdf" else "md"
+        )
+        writer.record_artifact(
+            con, run_id=run_id, filename=attachment.filename, kind=kind,
+            sha256=hashlib.sha256(attachment.content).hexdigest(),
+            size=len(attachment.content),
+            renderer=pdf_renderer if kind == "pdf" else app_version, written_at=at,
+        )
+
+
+def _record_outbox(
+    con: sqlite3.Connection,
+    *,
+    run_id: int,
+    channel_sink: DigestSink,
+    gated_error: str | None,
+    at: datetime,
+) -> None:
+    """One outbox row per attempted channel, from CompositeSink's per-sink
+    attempt log; a non-composite sink (test stub) gets a single synthesized
+    row. delivered_at set on success = the idempotence anchor for retries."""
+    attempts = getattr(channel_sink, "last_attempts", None)
+    if not attempts:
+        channel = getattr(channel_sink, "channel_name", type(channel_sink).__name__)
+        outbox_id = writer.enqueue_delivery(
+            con, run_id=run_id, channel=channel,
+            fingerprint=getattr(channel_sink, "fingerprint", None), created_at=at,
+        )
+        writer.mark_delivery(
+            con, outbox_id=outbox_id, attempted_at=at, delivered=gated_error is None,
+            error=gated_error, next_retry_at=None if gated_error is None else at + _RETRY_DELAY,
+        )
+        return
+    for attempt in attempts:
+        outbox_id = writer.enqueue_delivery(
+            con, run_id=run_id, channel=attempt.channel,
+            fingerprint=attempt.fingerprint, created_at=at,
+        )
+        writer.mark_delivery(
+            con, outbox_id=outbox_id, attempted_at=at, delivered=attempt.ok,
+            error=attempt.error, next_retry_at=None if attempt.ok else at + _RETRY_DELAY,
+        )
 
 
 def _fetch_ticker(ticker: str, sources: Sequence[DataSource]) -> _TickerFetch:
@@ -364,11 +443,18 @@ def run(
                 con, run_id=run_id, status="artifact_failed", at=now(), error=artifact_error
             )
         else:
+            _record_artifacts(
+                con, run_id=run_id, digest_path=digest_path, markdown=markdown,
+                attachments=attachments, app_version=app_version, at=now(),
+            )
             writer.mark_publication(con, run_id=run_id, status="artifact_committed", at=now())
         if deliver_channels and artifact_error is None:
             writer.mark_publication(con, run_id=run_id, status="delivery_pending", at=now())
             gated_path, gated_error = _write_digest(
                 gated_sink, markdown, run_id=run_id, as_of=as_of, attachments=attachments
+            )
+            _record_outbox(
+                con, run_id=run_id, channel_sink=gated_sink, gated_error=gated_error, at=now()
             )
             if digest_path is None:
                 digest_path = gated_path
