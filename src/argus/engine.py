@@ -103,7 +103,10 @@ def _write_digest(
     attachments: Sequence[Attachment],
 ) -> tuple[Path | None, str | None]:
     """One sink write → (path, delivery error). A DeliveryError is disclosed,
-    never fatal — the caller decides the exit code."""
+    never fatal — the caller decides the exit code. Any OTHER exception (an
+    OSError from the file sink, a sink bug) is caught the same way: a failed
+    write must leave a recorded lifecycle state, never a mid-publication
+    crash with a raw traceback."""
     try:
         if attachments:
             path = sink.write(
@@ -113,6 +116,8 @@ def _write_digest(
             path = sink.write(markdown, run_id=run_id, as_of=as_of.date())
     except DeliveryError as exc:
         return exc.digest_path, str(exc)
+    except Exception as exc:
+        return None, f"{type(sink).__name__}: {redact(str(exc))}"
     return path, None
 
 
@@ -171,6 +176,8 @@ def run(
     before_digest: Callable[[sqlite3.Connection, int], None] | None = None,
     artifact_builder: Callable[..., Sequence[Attachment]] | None = None,
     gated_sink: DigestSink | None = None,
+    gate_channels: bool = True,
+    now: Callable[[], datetime] | None = None,
 ) -> RunOutcome:
     """Execute one run. `as_of`/`today` are injected — nothing below the CLI
     reads the clock, which is what makes golden end-to-end tests exact.
@@ -182,11 +189,20 @@ def run(
     is assembled — scout uses it to persist candidate verdicts so the digest
     reads them from SQL like everything else.
 
-    `sink` is written on every digesting run; `gated_sink` (the events-only
-    delivery policy) only when the run carries NEW information
-    (changes.has_new_information) — a skipped gated delivery is policy, not
-    failure, and is disclosed in the digest header via a run note."""
+    `sink` is the ARTIFACT sink (the file record), written on every digesting
+    run. `gated_sink` carries the delivery channels (Discord/email): with
+    `gate_channels=True` (events-only policy) it fires only when the run
+    carries NEW information (changes.has_new_information) — a skipped gated
+    delivery is policy, not failure, and is disclosed via a run note; with
+    `gate_channels=False` (the 'always' policy) it fires unconditionally.
+    Keeping the two sinks separate is what lets the publication lifecycle
+    distinguish artifact_committed from delivered.
+
+    `now` supplies ACTUAL timestamps for publication transitions (the CLI
+    passes the wall clock); defaulting to `as_of` keeps tests deterministic."""
     require_aware(as_of)
+    if now is None:
+        now = lambda: as_of  # noqa: E731 — deterministic default for tests
     swept = writer.sweep_stale_runs(con, now=as_of)
     run_id = writer.begin_run(con, kind=kind, started_at=as_of, app_version=app_version)
 
@@ -272,10 +288,17 @@ def run(
                     events=events,
                     baseline_run_id=baseline_id,
                 )
-            except Exception:
+            except Exception as exc:
                 # Data is committed; the run degrades to partial and the
                 # ticker still renders (snapshot, no events) in the digest.
+                # The CAUSE is persisted — a swallowed diff error would be
+                # indistinguishable in the store from a partial fetch.
                 all_ok = False
+                writer.append_run_note(
+                    con,
+                    run_id=run_id,
+                    note=f"diff failed for {ctx.ticker}: {redact(str(exc)) or type(exc).__name__}",
+                )
         if status != "failed":
             any_data = True
         if status != "ok":
@@ -290,7 +313,18 @@ def run(
         run_status = "failed"
     writer.finish_run(con, run_id=run_id, status=run_status, finished_at=as_of)
     if before_digest is not None:
-        before_digest(con, run_id)  # persists regardless of run status
+        try:
+            before_digest(con, run_id)  # persists regardless of run status
+        except Exception as exc:
+            # A hook dying after finish_run must not crash publication: the
+            # digest still lands (without the hook's section) and the cause is
+            # disclosed in the digest header — recoverable, never a traceback.
+            writer.append_run_note(
+                con,
+                run_id=run_id,
+                note=f"pre-digest step failed: {redact(str(exc)) or type(exc).__name__}",
+            )
+    writer.mark_publication(con, run_id=run_id, status="assembled", at=now())
 
     digest_path: Path | None = None
     delivery_error: str | None = None
@@ -300,10 +334,10 @@ def run(
     # information, and the outage path already sets this precedent.
     if run_status != "failed" or kind == "scout":
         report = queries.run_report(con, run_id)
-        deliver_gated = False
+        deliver_channels = False
         if gated_sink is not None:
-            deliver_gated = changes.has_new_information(report)
-            if not deliver_gated:
+            deliver_channels = not gate_channels or changes.has_new_information(report)
+            if not deliver_channels:
                 # The skip must be visible in the digest ITSELF (header note),
                 # so the file copy and any later `report --run N` regeneration
                 # agree — rebuild the report after the note lands.
@@ -319,10 +353,20 @@ def run(
                 attachment_error = f"report attachment failed: {redact(str(exc))}"
                 writer.append_run_note(con, run_id=run_id, note=attachment_error)
         markdown = render(report)
-        digest_path, delivery_error = _write_digest(
+        # Publication, phase by phase. Never marked delivered before the
+        # artifact exists; a crash at any point leaves the last honest state.
+        digest_path, artifact_error = _write_digest(
             sink, markdown, run_id=run_id, as_of=as_of, attachments=attachments
         )
-        if deliver_gated:
+        if artifact_error is not None:
+            delivery_error = artifact_error
+            writer.mark_publication(
+                con, run_id=run_id, status="artifact_failed", at=now(), error=artifact_error
+            )
+        else:
+            writer.mark_publication(con, run_id=run_id, status="artifact_committed", at=now())
+        if deliver_channels and artifact_error is None:
+            writer.mark_publication(con, run_id=run_id, status="delivery_pending", at=now())
             gated_path, gated_error = _write_digest(
                 gated_sink, markdown, run_id=run_id, as_of=as_of, attachments=attachments
             )
@@ -334,6 +378,15 @@ def run(
                     if delivery_error is None
                     else f"{delivery_error}; {gated_error}"
                 )
+                writer.mark_publication(
+                    con, run_id=run_id, status="delivery_failed", at=now(), error=gated_error
+                )
+            else:
+                writer.mark_publication(con, run_id=run_id, status="delivered", at=now())
+        elif artifact_error is None:
+            # No channels configured, policy said never, or the events-only
+            # gate skipped: the file record is the whole publication.
+            writer.mark_publication(con, run_id=run_id, status="file_only", at=now())
     return RunOutcome(
         run_id=run_id,
         status=run_status,

@@ -173,8 +173,9 @@ def test_events_only_single_channel_is_composite_wrapped():
     from argus.cli import DeliverPolicy, _compose_sinks
 
     file_stub = _FileStub()
-    _, gated = _compose_sinks(file_stub, [_LeakyChannel()], DeliverPolicy.EVENTS_ONLY)
+    _, gated, gate = _compose_sinks(file_stub, [_LeakyChannel()], DeliverPolicy.EVENTS_ONLY)
     assert isinstance(gated, CompositeSink)
+    assert gate is True
     with pytest.raises(DeliveryError) as excinfo:  # not RuntimeError: wrapped
         gated.write("x", run_id=1, as_of=date(2026, 7, 20))
     for sentinel in SENTINELS:

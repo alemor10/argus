@@ -1,7 +1,7 @@
 -- Argus schema — single source of truth, applied under PRAGMA user_version.
 -- Append-only: the mutation surface of the whole program is INSERTs here,
--- two UPDATEs on runs (finish/sweep), and one digest file write.
--- All timestamps are UTC ISO-8601 TEXT.
+-- three UPDATEs on runs (finish/sweep/publication), and the digest file
+-- writes. All timestamps are UTC ISO-8601 TEXT.
 
 CREATE TABLE runs (
     run_id      INTEGER PRIMARY KEY,
@@ -11,7 +11,19 @@ CREATE TABLE runs (
     status      TEXT NOT NULL DEFAULT 'running'
                 CHECK (status IN ('running','complete','partial','failed')),
     app_version TEXT NOT NULL,
-    notes       TEXT
+    notes       TEXT,
+    -- Publication lifecycle, tracked SEPARATELY from data-collection status:
+    -- collecting -> assembled -> artifact_committed -> delivery_pending ->
+    -- delivered | delivery_failed; 'file_only' when no channel was configured
+    -- or the events-only gate skipped delivery; 'artifact_failed' when even
+    -- the file write failed. A crashed run rests at the phase it died in.
+    publication_status TEXT
+                CHECK (publication_status IN
+                       ('collecting','assembled','artifact_committed',
+                        'delivery_pending','delivered','delivery_failed',
+                        'file_only','artifact_failed')),
+    publication_error  TEXT,   -- safe (redacted) cause when delivery/artifact failed
+    published_at       TEXT    -- actual completion timestamp of the last transition
 );
 
 -- Per-ticker outcome, committed as each ticker finishes: a crash mid-run

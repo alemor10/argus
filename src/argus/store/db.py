@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 13
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -164,6 +164,16 @@ INSERT INTO scout_candidates_v12
 DROP TABLE scout_candidates;
 ALTER TABLE scout_candidates_v12 RENAME TO scout_candidates;
 """,
+    # v1.21: publication lifecycle — collection and publication are tracked
+    # SEPARATELY (runs.status stays data-collection health). Guarded ADD
+    # COLUMNs (the v1.4 'tier' pattern); the CHECK on publication_status lives
+    # only in schema.sql for fresh databases — SQLite ADD COLUMN keeps the
+    # declaration plain, and the writer is the single mutation path anyway.
+    12: lambda con: (
+        _add_column_if_absent(con, "runs", "publication_status", "TEXT"),
+        _add_column_if_absent(con, "runs", "publication_error", "TEXT"),
+        _add_column_if_absent(con, "runs", "published_at", "TEXT"),
+    ),
 }
 
 

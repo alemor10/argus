@@ -12,6 +12,7 @@ normal delivery path, and marks the run failed in the store.
 import sqlite3
 from collections.abc import Callable, Sequence, Set
 from datetime import date, datetime
+from pathlib import Path
 
 from argus import engine
 from argus.digest import DeliveryError, DigestSink, render
@@ -45,12 +46,17 @@ def run_scout(
     exclude: Set[str],
     artifact_builder: Callable[..., Sequence] | None = None,
     price_fetcher: Callable[[str, date], Sequence[tuple[date, float]] | None] | None = None,
+    gated_sink: DigestSink | None = None,
+    gate_channels: bool = True,
+    now: Callable[[], datetime] | None = None,
 ) -> engine.RunOutcome:
     """One scout run. `exclude` is the current watchlist (already-watched
     names are never proposed). Screener values only select candidates —
     every reported number comes from the enrichment pipeline. `price_fetcher`
     supplies realized history for the self-scoring scorecard (defaults to the
-    live Yahoo fetch; injected in tests)."""
+    live Yahoo fetch; injected in tests). `sink` is the artifact (file) sink;
+    `gated_sink`/`gate_channels`/`now` forward to engine.run's publication
+    lifecycle (see engine.run)."""
     if price_fetcher is None:
         from argus.sources.yahoo import fetch_price_series
 
@@ -60,7 +66,9 @@ def run_scout(
             min_market_cap=criteria.min_market_cap, min_avg_volume=criteria.min_avg_volume
         )
     except ScreenerError as exc:
-        return _outage_run(con, sink, as_of, app_version, str(exc))
+        return _outage_run(
+            con, sink, as_of, app_version, str(exc), gated_sink=gated_sink, now=now
+        )
 
     result = screen(rows, criteria, exclude)
     # Dedupe on the canonical symbol: two screener rows can collapse to one
@@ -148,6 +156,9 @@ def run_scout(
         kind="scout",
         before_digest=before_digest,
         artifact_builder=artifact_builder,
+        gated_sink=gated_sink,
+        gate_channels=gate_channels,
+        now=now,
     )
 
 
@@ -333,10 +344,16 @@ def _outage_run(
     as_of: datetime,
     app_version: str,
     error: str,
+    *,
+    gated_sink: DigestSink | None = None,
+    now: Callable[[], datetime] | None = None,
 ) -> engine.RunOutcome:
     """The screener is down: no candidates were evaluated, and the digest
     must SAY so — an empty-looking report would read as 'nothing passed the
-    screen', which is a different (and false) statement."""
+    screen', which is a different (and false) statement. Follows the same
+    artifact-then-channels publication lifecycle as engine.run."""
+    if now is None:
+        now = lambda: as_of  # noqa: E731 — deterministic default for tests
     run_id = writer.begin_run(con, kind="scout", started_at=as_of, app_version=app_version)
     writer.finish_run(
         con,
@@ -345,14 +362,39 @@ def _outage_run(
         finished_at=as_of,
         notes=f"screener unavailable — no candidates evaluated: {error}",
     )
-    digest_path = None
-    delivery_error = None
+    writer.mark_publication(con, run_id=run_id, status="assembled", at=now())
+    markdown = render(queries.run_report(con, run_id))
+    digest_path: Path | None = None
+    delivery_error: str | None = None
     try:
-        digest_path = sink.write(
-            render(queries.run_report(con, run_id)), run_id=run_id, as_of=as_of.date()
-        )
+        digest_path = sink.write(markdown, run_id=run_id, as_of=as_of.date())
     except DeliveryError as exc:
         digest_path, delivery_error = exc.digest_path, str(exc)
+        writer.mark_publication(
+            con, run_id=run_id, status="artifact_failed", at=now(), error=delivery_error
+        )
+    except Exception as exc:
+        from argus.redact import redact
+
+        delivery_error = f"{type(sink).__name__}: {redact(str(exc))}"
+        writer.mark_publication(
+            con, run_id=run_id, status="artifact_failed", at=now(), error=delivery_error
+        )
+    else:
+        writer.mark_publication(con, run_id=run_id, status="artifact_committed", at=now())
+        if gated_sink is not None:
+            writer.mark_publication(con, run_id=run_id, status="delivery_pending", at=now())
+            try:
+                gated_sink.write(markdown, run_id=run_id, as_of=as_of.date())
+            except DeliveryError as exc:
+                delivery_error = str(exc)
+                writer.mark_publication(
+                    con, run_id=run_id, status="delivery_failed", at=now(), error=delivery_error
+                )
+            else:
+                writer.mark_publication(con, run_id=run_id, status="delivered", at=now())
+        else:
+            writer.mark_publication(con, run_id=run_id, status="file_only", at=now())
     return engine.RunOutcome(
         run_id=run_id,
         status="failed",

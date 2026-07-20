@@ -44,6 +44,7 @@ from argus.digest import (
     FileDigestSink,
     render,
 )
+from argus.locking import LockHeldError, run_lock
 from argus.thesis import parse_thesis_check
 from argus.gates import DEFAULT_PROFILE
 from argus.sources import EdgarSource, FinnhubSource, FredSource, YahooSource
@@ -266,23 +267,21 @@ def _build_sinks(paths: Paths) -> tuple[DigestSink, list[DigestSink]]:
 
 def _compose_sinks(
     file_sink: DigestSink, channels: list[DigestSink], deliver: DeliverPolicy
-) -> tuple[DigestSink, DigestSink | None]:
-    """(always-sink, gated-sink-or-None) for engine.run. Under ALWAYS the
-    channels ride with the file sink exactly as before; under EVENTS_ONLY
-    they only fire when the run carries new information; under NEVER only
-    the file record is written."""
-    if deliver is DeliverPolicy.NEVER:
-        return file_sink, None
-    if deliver is DeliverPolicy.EVENTS_ONLY and channels:
-        # ALWAYS CompositeSink-wrapped, even a single channel: CompositeSink is
-        # the redaction + DeliveryError boundary. A bare DiscordDigestSink here
-        # would raise a raw httpx error whose message embeds the webhook URL —
-        # uncaught by the engine (which handles DeliveryError only), it would
-        # print the secret in a CLI traceback.
-        return file_sink, CompositeSink(*channels)
-    if channels:
-        return CompositeSink(file_sink, *channels), None
-    return file_sink, None
+) -> tuple[DigestSink, DigestSink | None, bool]:
+    """(artifact-sink, channel-sink-or-None, gate_channels) for engine.run.
+
+    The file sink and the delivery channels are DELIBERATELY never composed
+    into one sink: keeping them separate is what lets the publication
+    lifecycle distinguish artifact_committed from delivered, and lets a failed
+    Discord post be retried without rewriting the file. Channels are ALWAYS
+    CompositeSink-wrapped, even a single one: CompositeSink is the redaction +
+    DeliveryError boundary — a bare DiscordDigestSink would raise a raw httpx
+    error whose message embeds the webhook URL, uncaught by the engine (which
+    handles DeliveryError only), printing the secret in a CLI traceback."""
+    if deliver is DeliverPolicy.NEVER or not channels:
+        return file_sink, None, False
+    gate = deliver is DeliverPolicy.EVENTS_ONLY
+    return file_sink, CompositeSink(*channels), gate
 
 
 def _pdf_artifact_builder():
@@ -573,30 +572,37 @@ def watch(
     except ValueError as exc:  # half-configured channel: refuse to run at all
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    sink, gated_sink = _compose_sinks(file_sink, channels, deliver)
+    sink, channel_sink, gate = _compose_sinks(file_sink, channels, deliver)
     as_of = datetime.now(UTC)
-    con = connect(paths.db)
     try:
-        migrate(con)
-        outcome = engine.run(
-            contexts,
-            con=con,
-            sources=_build_sources(fred_series),
-            profile=DEFAULT_PROFILE,
-            sink=sink,
-            as_of=as_of,
-            today=as_of.date(),
-            app_version=argus.__version__,
-            artifact_builder=_pdf_artifact_builder(),
-            gated_sink=gated_sink,
-            before_digest=_compose_before_digest(
-                _market_wire_step(macro_config.bellwethers, deliver),
-                _etf_step(macro_config.etfs, resolve_secrets().edgar_contact_email),
-                _insider_radar_step(),
-            ),
-        )
-    finally:
-        con.close()
+        with run_lock(paths.root):
+            con = connect(paths.db)
+            try:
+                migrate(con)
+                outcome = engine.run(
+                    contexts,
+                    con=con,
+                    sources=_build_sources(fred_series),
+                    profile=DEFAULT_PROFILE,
+                    sink=sink,
+                    as_of=as_of,
+                    today=as_of.date(),
+                    app_version=argus.__version__,
+                    artifact_builder=_pdf_artifact_builder(),
+                    gated_sink=channel_sink,
+                    gate_channels=gate,
+                    now=lambda: datetime.now(UTC),
+                    before_digest=_compose_before_digest(
+                        _market_wire_step(macro_config.bellwethers, deliver),
+                        _etf_step(macro_config.etfs, resolve_secrets().edgar_contact_email),
+                        _insider_radar_step(),
+                    ),
+                )
+            finally:
+                con.close()
+    except LockHeldError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"Run {outcome.run_id}: {outcome.status} ({len(contexts)} tickers)")
     _exit_for(outcome)
 
@@ -689,26 +695,34 @@ def scout(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    sink, _ = _compose_sinks(file_sink, channels, deliver)
+    sink, channel_sink, gate = _compose_sinks(file_sink, channels, deliver)
     as_of = datetime.now(UTC)
-    con = connect(paths.db)
     try:
-        migrate(con)
-        outcome = run_scout(
-            con=con,
-            screener=TradingViewScreener(),
-            criteria=criteria,
-            sources=_build_sources(),
-            profile=DEFAULT_PROFILE,
-            sink=sink,
-            as_of=as_of,
-            today=as_of.date(),
-            app_version=argus.__version__,
-            exclude=exclude,
-            artifact_builder=_pdf_artifact_builder(),
-        )
-    finally:
-        con.close()
+        with run_lock(paths.root):
+            con = connect(paths.db)
+            try:
+                migrate(con)
+                outcome = run_scout(
+                    con=con,
+                    screener=TradingViewScreener(),
+                    criteria=criteria,
+                    sources=_build_sources(),
+                    profile=DEFAULT_PROFILE,
+                    sink=sink,
+                    as_of=as_of,
+                    today=as_of.date(),
+                    app_version=argus.__version__,
+                    exclude=exclude,
+                    artifact_builder=_pdf_artifact_builder(),
+                    gated_sink=channel_sink,
+                    gate_channels=gate,
+                    now=lambda: datetime.now(UTC),
+                )
+            finally:
+                con.close()
+    except LockHeldError as exc:
+        typer.echo(str(exc), err=True)
+        raise typer.Exit(1) from exc
     typer.echo(f"Scout run {outcome.run_id}: {outcome.status}")
     _exit_for(outcome)
 

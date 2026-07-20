@@ -55,15 +55,51 @@ def begin_run(
     started_at: datetime,
     app_version: str,
 ) -> int:
-    """INSERT a runs row with status='running'; returns run_id."""
+    """INSERT a runs row with status='running' and the publication lifecycle
+    at its first phase ('collecting'); returns run_id."""
     require_aware(started_at)
     with con:
         cur = con.execute(
-            "INSERT INTO runs (kind, started_at, app_version) VALUES (?, ?, ?)",
+            "INSERT INTO runs (kind, started_at, app_version, publication_status) "
+            "VALUES (?, ?, ?, 'collecting')",
             (kind, started_at.isoformat(), app_version),
         )
     assert cur.lastrowid is not None  # INTEGER PRIMARY KEY always yields one
     return cur.lastrowid
+
+
+PublicationStatus = Literal[
+    "collecting",
+    "assembled",
+    "artifact_committed",
+    "delivery_pending",
+    "delivered",
+    "delivery_failed",
+    "file_only",
+    "artifact_failed",
+]
+
+
+def mark_publication(
+    con: sqlite3.Connection,
+    *,
+    run_id: int,
+    status: PublicationStatus,
+    at: datetime,
+    error: str | None = None,
+) -> None:
+    """Advance the run's publication lifecycle — the third sanctioned runs
+    UPDATE (finish/sweep/publication). `at` is the ACTUAL transition time
+    (injected; the CLI passes the wall clock, tests pass a fixed instant).
+    A run is never marked delivered before its artifact exists — the engine
+    sequences the calls; this function just records, redacting the error."""
+    require_aware(at)
+    with con:
+        con.execute(
+            "UPDATE runs SET publication_status = ?, publication_error = ?, "
+            "published_at = ? WHERE run_id = ?",
+            (status, redact(error) if error else None, at.isoformat(), run_id),
+        )
 
 
 def sweep_stale_runs(
