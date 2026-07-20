@@ -160,7 +160,7 @@ def _proposals_section(report: RunReport) -> list[str]:
     screen-reasons column, labeled as claims."""
     proposed = [p for p in report.scout if p.status == "proposed"]
     leaders = [p for p in report.scout if p.status == "leader"]
-    lines = ["## Proposals", ""]
+    lines = ["## Conviction — the graded shortlist", ""]
     if not report.scout and report.status == "failed":
         # An outage is not a verdict: "evaluated nothing" must never read as
         # "nothing passed" — those are different statements.
@@ -317,7 +317,7 @@ def _sector_board_section(report: RunReport) -> list[str]:
     sector (banks, utilities, REITs) can fill. Screener claims, never gated or
     scored."""
     board = [p for p in report.scout if p.status == "board"]
-    lines = ["## Sector board (screener claims — relative value per sector)", ""]
+    lines = ["## Worth watching — relative value per sector (screener claims)", ""]
     if not board:
         lines.append("No sector-board names this run.")
         return lines
@@ -363,7 +363,7 @@ def _deterioration_section(report: RunReport) -> list[str]:
     FACTS, never a forecast, recommendation, or trade signal (the hard
     constraint: Argus informs, the human decides). Never gated, never scored."""
     det = [p for p in report.scout if p.status == "deterioration"]
-    lines = ["## Deterioration watch (screener claims — weakening fundamentals)", ""]
+    lines = ["## Under pressure — weakening fundamentals (screener claims)", ""]
     if not det:
         lines.append("No names flagged deteriorating this run.")
         return lines
@@ -1416,7 +1416,7 @@ def _discord_headline(markdown: str) -> str:
     for line in lines:
         if line.startswith("## "):
             # Watch digests hook with Changes; scout digests with Proposals.
-            in_changes = line.strip() in ("## Changes", "## Proposals")
+            in_changes = line.strip() in ("## Changes", "## Conviction — the graded shortlist")
             continue
         if in_changes and line.strip():
             changes.append(line)

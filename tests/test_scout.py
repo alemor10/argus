@@ -526,8 +526,8 @@ class TestScoutRun:
         assert statuses["BANKCO"] == "board"        # cleared no quality gate, still surfaced
         assert statuses["ROTCO"] == "deterioration"  # flagged weakening, not a passer
         digest = sink.digests[outcome.run_id]
-        assert "Sector board" in digest and "BANKCO" in digest
-        assert "Deterioration watch" in digest and "ROTCO" in digest
+        assert "Worth watching" in digest and "BANKCO" in digest
+        assert "Under pressure" in digest and "ROTCO" in digest
         # The deterioration disclaimer holds the read-only / no-forecast line.
         assert "not a forecast, recommendation, or trade signal" in digest
 

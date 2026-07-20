@@ -181,8 +181,39 @@ _HUMANIZED_FIELDS = frozenset(
 )
 
 
+_SCOUT_CARDS_TITLE = "Reading — worth watching & under pressure"
+_SCOUT_CARDS_CAPTION = (
+    "A curated few from the broader lenses — business summary, claimed numbers, "
+    "and a 1-year price strip. Yahoo claims, unverified; not gated, not scored."
+)
+
+
+def scout_card_subjects(report: RunReport) -> list[tuple[str, str]]:
+    """Which broader-lens names get a reading card, and why — a curated few,
+    deterministic from the run so `report --run N` reproduces them: up to 3
+    'worth watching' sector leaders (rank 1 in their sector) and up to 3 'under
+    pressure' names, both in a stable order."""
+    board = sorted(
+        (p for p in report.scout if p.status == "board" and p.rank == 1),
+        key=lambda p: (p.sector, p.ticker),
+    )[:3]
+    det = sorted(
+        (p for p in report.scout if p.status == "deterioration"), key=lambda p: p.rank
+    )[:3]
+    subjects = [
+        (p.ticker, f"Worth watching — cheapest-for-growth in {p.sector}") for p in board
+    ]
+    subjects += [
+        (p.ticker, f"Under pressure — {'; '.join(p.screen_reasons.values())}") for p in det
+    ]
+    return subjects
+
+
 def build_pdf(
-    report: RunReport, history: History, revenue_series: RevenueSeries | None = None
+    report: RunReport,
+    history: History,
+    revenue_series: RevenueSeries | None = None,
+    scout_cards: Sequence[object] = (),
 ) -> bytes:
     """RunReport + price/revenue history → PDF bytes. Pure; deterministic.
 
@@ -246,6 +277,17 @@ def build_pdf(
             # only when the scan surfaced something for them.
             if any(p.status in ("board", "deterioration") for p in report.scout):
                 _save(pdf, _scout_lenses_page(report))
+            # Reading cards for a curated few of the broader-lens names, so they
+            # can be read (business + numbers + price strip), not just scanned.
+            for start in range(0, len(scout_cards), 3):
+                _save(
+                    pdf,
+                    _featured_page(
+                        report, history, scout_cards[start : start + 3],
+                        first=start == 0,
+                        title=_SCOUT_CARDS_TITLE, caption=_SCOUT_CARDS_CAPTION,
+                    ),
+                )
         for ticker, ticker_report, proposal in shown:
             _save(pdf, _detail_page(report, ticker, ticker_report, proposal, history, revenue))
     return buffer.getvalue()
@@ -427,7 +469,7 @@ def _scout_proposals_block(fig: Figure, cur: _Cursor, report: RunReport) -> None
     snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
     profiles = {t.context.ticker: t.profile for t in report.tickers}
 
-    cur.line("Proposals", size=11, weight="bold")
+    cur.line("Conviction — the graded shortlist", size=11, weight="bold")
     cur.gap(0.008)
     if not report.scout and report.status == "failed":
         # An outage is not a verdict: "evaluated nothing" must never read as
@@ -510,7 +552,7 @@ def _sector_board_block(fig: Figure, cur: _Cursor, report: RunReport) -> None:
     from argus.scout.sectors import CANONICAL_SECTORS
 
     board = [p for p in report.scout if p.status == "board"]
-    cur.line("Sector board — relative value by sector (screener claims)", size=11, weight="bold")
+    cur.line("Worth watching — relative value by sector (screener claims)", size=11, weight="bold")
     cur.gap(0.004)
     if not board:
         cur.line("No sector-board names this run.", size=9, color=_SECONDARY)
@@ -556,7 +598,7 @@ def _sector_board_block(fig: Figure, cur: _Cursor, report: RunReport) -> None:
 def _deterioration_block(cur: _Cursor, report: RunReport) -> None:
     det = [p for p in report.scout if p.status == "deterioration"]
     cur.line(
-        "Deterioration watch — weakening fundamentals (screener claims)",
+        "Under pressure — weakening fundamentals (screener claims)",
         size=11, weight="bold",
     )
     cur.gap(0.004)
@@ -1264,21 +1306,33 @@ def _extremes_pdf_lines(wire) -> list[tuple[str, str]]:
     return lines
 
 
-def _featured_page(report: RunReport, history: History, cards, *, first: bool = True) -> Figure:
-    """Worth reading about: the featured cards — who the companies are, why
-    they surfaced (mechanical rules), their claimed numbers, and a 1-year
-    price strip (raw history, ungated — captioned as such). Three cards per
-    page; further cards continue on the next."""
+_FEATURED_TITLE = "Worth reading about"
+_FEATURED_CAPTION = (
+    "Selection is mechanical — top two movers each way, two largest upcoming "
+    "reporters. All numbers are yahoo claims, unverified."
+)
+
+
+def _featured_page(
+    report: RunReport,
+    history: History,
+    cards,
+    *,
+    first: bool = True,
+    title: str = _FEATURED_TITLE,
+    caption: str = _FEATURED_CAPTION,
+) -> Figure:
+    """Reading cards — who the companies are, why they surfaced (mechanical
+    rules), their claimed numbers, and a 1-year price strip (raw history,
+    ungated — captioned as such). Three cards per page; further cards continue
+    on the next. Reused for the Daily's featured stocks and the scout's
+    broader-lens reading cards (title/caption vary)."""
     fig = plt.figure(figsize=_PAGE)
     cur = _Cursor(fig)
-    cur.line("Worth reading about" + ("" if first else " (continued)"), size=13, weight="bold")
+    cur.line(title + ("" if first else " (continued)"), size=13, weight="bold")
     cur.gap(0.006)
     if first:
-        cur.line(
-            "Selection is mechanical — top two movers each way, two largest upcoming "
-            "reporters. All numbers are yahoo claims, unverified.",
-            size=8, color=_MUTED, style="italic",
-        )
+        cur.wrapped(caption, size=8, color=_MUTED, style="italic", width=124, max_lines=2)
     cur.gap(0.014)
     for card in cards:
         if cur.y < _PAGE_FLOOR + 0.26:  # a full card's height — no partial cards

@@ -181,7 +181,7 @@ class TestDiscordDigestSink:
 
         scout_digest = (
             "# Argus scout digest — run 4 — 2026-07-13\n\nStatus: complete.\n\n"
-            "## Proposals\n\n| # | Ticker |\n| --- | --- |\n| 1 | CLEANCO |\n\n"
+            "## Conviction — the graded shortlist\n\n| # | Ticker |\n| --- | --- |\n| 1 | CLEANCO |\n\n"
             "## Data health\n\n- yahoo: 1 ok\n"
         )
         headline = _discord_headline(scout_digest)

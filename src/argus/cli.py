@@ -291,12 +291,23 @@ def _pdf_artifact_builder():
 
     def build(report):
         from argus.digest import Attachment
-        from argus.report_pdf import build_pdf
+        from argus.report_pdf import build_pdf, scout_card_subjects
         from argus.sources.yahoo import fetch_annual_revenue, fetch_history
 
+        scout_cards: list = []
+        card_symbols: list[str] = []
         if report.kind == "scout":
             tickers = [p.ticker for p in report.scout if p.status == "proposed"]
             macro_market: list[str] = []
+            # Reading cards for a curated few broader-lens names: one yfinance
+            # info fetch each (claims-labeled, degrades gracefully), plus a
+            # price strip from the history mapping below (NOT revenue — cards
+            # carry a price strip only).
+            from argus.market import fetch_feature_card
+
+            card_subjects = scout_card_subjects(report)
+            scout_cards = [fetch_feature_card(sym, why, {}) for sym, why in card_subjects]
+            card_symbols = [sym for sym, _ in card_subjects]
         else:
             # Macro series get no detail pages; market-quote series DO get a
             # 30-day sparkline in the dashboard (ungated display data, like
@@ -319,7 +330,7 @@ def _pdf_artifact_builder():
         history |= {symbol: fetch_history(symbol, period="1mo") for symbol in macro_market}
         history |= {
             symbol: fetch_history(symbol)
-            for symbol in featured
+            for symbol in (*featured, *card_symbols)
             if symbol not in history
         }
         revenue_series = {ticker: fetch_annual_revenue(ticker) for ticker in tickers}
@@ -327,7 +338,11 @@ def _pdf_artifact_builder():
             f"argus-{report.kind}-{report.as_of.date().isoformat()}-run{report.run_id}.pdf"
         )
         return [
-            Attachment(filename, build_pdf(report, history, revenue_series), "application/pdf")
+            Attachment(
+                filename,
+                build_pdf(report, history, revenue_series, scout_cards=scout_cards),
+                "application/pdf",
+            )
         ]
 
     return build

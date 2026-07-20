@@ -386,6 +386,30 @@ class TestScoutPdf:
         assert _page_count(pdf) == 3  # two front pages + one detail page
         assert build_pdf(report, history) == build_pdf(report, history)
 
+    def test_scout_card_subjects_curates_board_then_deterioration(self):
+        from argus.report_pdf import scout_card_subjects
+
+        board = [
+            _proposal(f"B{i}", 1, status="board", sector=s)
+            for i, s in enumerate(["Financial Services", "Energy", "Utilities", "Technology"])
+        ]
+        det = [_proposal(f"D{i}", i + 1, status="deterioration") for i in range(4)]
+        subjects = scout_card_subjects(_scout_report(board + det, []))
+        assert len(subjects) == 6  # up to 3 worth-watching + up to 3 under-pressure
+        assert all("Worth watching" in why for _, why in subjects[:3])
+        assert all("Under pressure" in why for _, why in subjects[3:])
+
+    def test_scout_cards_add_reading_pages(self):
+        from argus.models import FeatureCard
+
+        report = _scout_report([_proposal("AAA", 1)], [_ticker_report("AAA", _garp_values())])
+        cards = [FeatureCard(symbol="JPM", why="Worth watching — X", name="JPMorgan")]
+        pdf = build_pdf(
+            report, {"AAA": _synthetic_history(), "JPM": _synthetic_history()}, scout_cards=cards
+        )
+        assert pdf.startswith(b"%PDF")
+        assert _page_count(pdf) == 4  # two front pages + one detail + one card page
+
 
 class TestWatchPdf:
     def test_watch_kind_renders_one_page_per_ticker(self):

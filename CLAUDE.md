@@ -163,6 +163,17 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       conviction shortlist and its scorecard stay pure. New scout PDF page 3 +
       digest sections; `scout_candidates` gains `board`/`deterioration`
       statuses (schema v12). See ARCHITECTURE.md, Scout.
+- [x] Scout buckets + reading cards (v1.20, 2026-07-20): renamed the three
+      discovery sections to the human's language — **Conviction** (graded
+      shortlist), **Worth watching** (sector board), **Under pressure**
+      (deterioration) — and added **reading cards** for a curated few of the
+      broader-lens names (up to 3 worth-watching leaders + 3 under-pressure),
+      so they can be READ (business summary + claimed numbers + 1-yr price
+      strip), not just scanned. Cards reuse the Daily's featured-card machinery
+      (`fetch_feature_card` + a parameterized `_featured_page`); curation is
+      `scout_card_subjects` (deterministic → `report --run N` reproduces).
+      Watchlist stays in the Daily (scout is names you don't hold). No schema
+      change.
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 
