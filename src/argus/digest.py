@@ -34,6 +34,7 @@ from argus.models import (
     ThesisDrift,
     TickerReport,
 )
+from argus.redact import redact
 from argus.thesis import evaluate_thesis_checks
 
 # Human-facing field names. Adding a Field without a label falls back to the
@@ -1462,7 +1463,9 @@ class CompositeSink:
                 else:  # minimal sinks/test stubs may not accept the parameter
                     result = sink.write(markdown, run_id=run_id, as_of=as_of)
             except Exception as exc:
-                failures.append(f"{type(sink).__name__}: {exc}")
+                # A webhook/SMTP error embeds the secret-bearing URL — scrub it
+                # before it reaches the DeliveryError, the echo, or a run note.
+                failures.append(f"{type(sink).__name__}: {redact(str(exc))}")
                 continue
             if path is None and result is not None:
                 path = result

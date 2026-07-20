@@ -16,6 +16,7 @@ from pydantic import AwareDatetime
 
 from argus.fields import Field, Source
 from argus.models import BellwetherEarning, ParseFailure, RawObservation
+from argus.redact import redact
 from argus.sources.base import FetchResult, SourceError
 
 _QUOTE_URL = "https://finnhub.io/api/v1/quote"
@@ -39,7 +40,9 @@ class FinnhubSource:
             try:
                 payload = self._fetch_raw(ticker)
             except Exception as exc:
-                raise SourceError(f"finnhub: fetch failed for {ticker}: {exc}") from exc
+                raise SourceError(
+                    f"finnhub: fetch failed for {ticker}: {redact(str(exc))}"
+                ) from exc
         return self.parse(payload, ticker, fetched_at)
 
     def _fetch_raw(self, ticker: str) -> Any:
@@ -88,7 +91,9 @@ class FinnhubSource:
             try:
                 payload = self._fetch_calendar(frm, to)
             except Exception as exc:
-                raise SourceError(f"finnhub: earnings calendar failed: {exc}") from exc
+                raise SourceError(
+                    f"finnhub: earnings calendar failed: {redact(str(exc))}"
+                ) from exc
         return parse_earnings_calendar(payload)
 
     def _fetch_calendar(self, frm: date, to: date) -> Any:
