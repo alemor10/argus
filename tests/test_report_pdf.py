@@ -553,9 +553,9 @@ class TestWhySurfaced:
         )
         assert _why_surfaced(self._quality_garp_proposal(), snapshot) == (
             "Surfaced at #4 (2nd consecutive week): "
-            "trades at 15.9× forward earnings (verified), "
+            "trades at 15.9× forward earnings (gate-accepted), "
             "with the screener reporting rev growth +70.7% ≥ 8%, "
-            "on verified gross margins of 74.1% and ROE of 114.3%. "
+            "on gate-accepted gross margins of 74.1% and ROE of 114.3%. "
             "Passed all 7 screen rules. "
             'Argus proposes; the thesis is yours — argus promote QGRP --thesis "..."'
         )
@@ -565,7 +565,7 @@ class TestWhySurfaced:
             "QGRP", {Field.REVENUE_GROWTH: _fv(Field.REVENUE_GROWTH, 0.707)}
         )
         text = _why_surfaced(self._quality_garp_proposal(), snapshot)
-        assert "with verified revenue growth of +70.7%" in text
+        assert "with gate-accepted revenue growth of +70.7%" in text
         assert "screener reporting" not in text
 
     def test_no_data_degrades_to_rank_and_streak_only(self):
@@ -760,14 +760,14 @@ class TestPeersLine:
         snapshot = _snapshot("AAA", {Field.PE_FWD: _fv(Field.PE_FWD, 18.4)})
         assert _peer_line(proposal, snapshot) == (
             "Semiconductors (n=12) — median fwd P/E 28.4 · "
-            "AVGO 32.1, AMD 29.9, INTC — · AAA (verified) 18.4"
+            "AVGO 32.1, AMD 29.9, INTC — · AAA (gate-accepted) 18.4"
         )
 
     def test_unverified_own_fwd_pe_is_a_dash_not_a_claim(self):
         proposal = _proposal("AAA", 1, peer_context=_PEER_CONTEXT)
         assert _peer_line(proposal, None) == (
             "Semiconductors (n=12) — median fwd P/E 28.4 · "
-            "AVGO 32.1, AMD 29.9, INTC — · AAA (verified) —"
+            "AVGO 32.1, AMD 29.9, INTC — · AAA (gate-accepted) —"
         )
 
     def test_none_or_empty_context_is_omitted_silently(self):
@@ -783,7 +783,7 @@ class TestPeersLine:
         }
         proposal = _proposal("AAA", 1, peer_context=context)
         assert _peer_line(proposal, None) == (
-            "industry unknown — median fwd P/E — · AVGO — · AAA (verified) —"
+            "industry unknown — median fwd P/E — · AVGO — · AAA (gate-accepted) —"
         )
 
     def test_peers_line_renders_on_detail_page(self):

@@ -1000,3 +1000,55 @@ Honest by construction:
   relation-shaped table (constituents) beside `observations`, not forced into
   the scalar model.
 - **Email/notification digests** → additional `DigestSink` implementations.
+
+## Discord-safe publication — v1.21 (security boundary, lifecycle, artifacts, outbox)
+
+Hardening pass before anything new ships: every digest safe, traceable, and
+reliably deliverable to Discord.
+
+**Security boundary.** `redact()` (argus/redact.py) scrubs secret-bearing
+strings (`token=`/`api_key=` query params, Discord/Slack webhook URLs) and is
+applied at the PERSISTENCE AND OUTPUT boundaries, not only inside providers:
+the writer redacts everything landing in runs.notes, run_tickers.error, and
+run_sources.error; CompositeSink redacts every channel failure; the engine
+redacts at SourceHealth creation and in the ticker/attachment catch-alls.
+Channels are ALWAYS CompositeSink-wrapped (a bare channel sink once let a
+webhook-bearing httpx traceback escape uncaught). Sentinel-secret tests
+(tests/test_security_boundary.py) inject a fake token + webhook into failure
+paths and assert them absent from the full SQLite dump, rendered digests,
+RunOutcome, and CLI output.
+
+**Publication lifecycle.** Collection health (runs.status) and publication
+are tracked separately: runs.publication_status walks collecting → assembled
+→ artifact_committed → delivery_pending → delivered | delivery_failed, with
+file_only (no channel / events-only skip) and artifact_failed (file write
+died) as honest terminals; publication_error carries the redacted cause and
+published_at the ACTUAL transition time (injectable now(); the CLI passes
+the wall clock, tests stay deterministic). The artifact (file) sink and the
+delivery channels are separate engine arguments end to end — a run is never
+marked delivered because collection completed, never before the file exists,
+and channels are not attempted when the artifact write failed. Previously
+swallowed failures (the diff phase, a crashing before_digest hook) persist
+as redacted run notes. An flock run lock (argus/locking.py, kernel-owned so
+crashes never leave it stale) serializes watch/scout/recap/deliver per root.
+
+**Immutable artifacts + outbox.** Every written report file gets an
+`artifacts` row (sha256, bytes, renderer version — matplotlib included for
+PDFs — written_at, original flag); all file writes are atomic (temp +
+os.replace). Every channel attempt gets a `delivery_outbox` row (channel,
+endpoint fingerprint = hash prefix never the secret, attempts, redacted
+last_error, delivered_at). `argus deliver [--run N]` retries everything
+undelivered WITHOUT re-running collection: reads recorded artifacts from
+disk, refuses any file that no longer matches its recorded sha256, posts,
+marks delivered (delivered_at is the idempotence anchor — webhooks have no
+idempotency keys, so a delivered row is never re-attempted). `argus report
+--run N` VERIFIES the original artifact: bit-for-bit → confirmed and left
+untouched; divergent (renderer upgrade) → a separately-named `-rerender`
+file recorded as original=0 — history is never overwritten.
+
+**Evidence-quality language.** User-facing claims now say what the evidence
+supports: "Research shortlist — screened candidates, graded vs SPY" (was
+"Conviction"); "gate-accepted" (was "verified"/"gate-verified") with ✓ marks
+carrying cross-source corroboration; the survivorship caption states
+precisely that unpriceable names are excluded from medians and counted.
+Schema v13 (publication columns) + v14 (artifacts, delivery_outbox).

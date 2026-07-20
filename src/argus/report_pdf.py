@@ -114,7 +114,7 @@ _TILE_ORDER = (
 )
 
 _UNGATED_FOOTER = (
-    "Price & revenue charts: raw Yahoo data, ungated — the metrics panel is gate-verified."
+    "Price & revenue charts: raw Yahoo data, ungated — the metrics panel is gate-accepted."
 )
 
 # Under the revenue bars: they are fiscal-year totals, while the panel's
@@ -509,7 +509,7 @@ def _scout_proposals_block(fig: Figure, cur: _Cursor, report: RunReport) -> None
         cur.gap(0.006)
         cur.wrapped(
             "Grouped by canonical sector; '#' is the global screen rank. Every value is "
-            "gate-verified from this run's snapshots — '—' means the gates accepted nothing.",
+            "gate-accepted from this run's snapshots — '—' means the gates accepted nothing.",
             size=8, color=_MUTED, style="italic", width=120, max_lines=2,
         )
 
@@ -1594,7 +1594,7 @@ def _detail_page(
         if claims:
             cur.wrapped(
                 "Screen (screener claims — every value in the panel below is "
-                f"gate-verified): {claims}",
+                f"gate-accepted): {claims}",
                 size=8, color=_MUTED, style="italic", width=118, max_lines=2,
             )
         _peer_dotplot(fig, cur, proposal, snapshot)
@@ -1617,7 +1617,7 @@ def _detail_page(
     _revenue_chart(fig, (0.665, 0.435, 0.275, 0.165), revenue_series.get(ticker))
 
     cur = _Cursor(fig, y=0.375)
-    cur.line("Verified metrics (gate-accepted, with provenance)", size=9.5, weight="bold")
+    cur.line("Metrics — gate-accepted, with provenance (\u2713 = corroborated)", size=9.5, weight="bold")
     cur.gap(0.005)
     for text, tone in _metric_lines(ticker_report):
         cur.line(text, size=7.5, family="monospace", color=tone, step=0.0142)
@@ -1740,10 +1740,10 @@ def _why_surfaced(proposal: ScoutProposal, snapshot: Snapshot | None) -> str:
     clauses: list[str] = []
     fwd = _verified_num(snapshot, Field.PE_FWD)
     if fwd is not None:
-        clauses.append(f"trades at {fwd:.1f}× forward earnings (verified)")
+        clauses.append(f"trades at {fwd:.1f}× forward earnings (gate-accepted)")
     growth = _verified_num(snapshot, Field.REVENUE_GROWTH)
     if growth is not None:
-        clauses.append(f"with verified revenue growth of {growth * 100:+.1f}%")
+        clauses.append(f"with gate-accepted revenue growth of {growth * 100:+.1f}%")
     else:
         claim = proposal.screen_reasons.get("revenue_growth")
         if claim:
@@ -1756,7 +1756,7 @@ def _why_surfaced(proposal: ScoutProposal, snapshot: Snapshot | None) -> str:
     if roe is not None:
         quality.append(f"ROE of {roe * 100:.1f}%")
     if quality:
-        clauses.append("on verified " + " and ".join(quality))
+        clauses.append("on gate-accepted " + " and ".join(quality))
     streak = (
         "new this week" if proposal.streak <= 1
         else f"{_ordinal(proposal.streak)} consecutive week"
@@ -1804,9 +1804,9 @@ def _peer_line(proposal: ScoutProposal, snapshot: Snapshot | None) -> str | None
         peers.append(f"{_clip(name, 8)} {float(pe):.1f}" if _finite(pe) else f"{_clip(name, 8)} —")
     own = _verified_num(snapshot, Field.PE_FWD)
     own_text = (
-        f"{proposal.ticker} (verified) {own:.1f}"
+        f"{proposal.ticker} (gate-accepted) {own:.1f}"
         if own is not None
-        else f"{proposal.ticker} (verified) —"
+        else f"{proposal.ticker} (gate-accepted) —"
     )
     parts = [head]
     if peers:

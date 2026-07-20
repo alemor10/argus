@@ -174,6 +174,24 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       `scout_card_subjects` (deterministic → `report --run N` reproduces).
       Watchlist stays in the Daily (scout is names you don't hold). No schema
       change.
+- [x] Discord-safe publication (v1.21, 2026-07-20): the trustworthiness
+      milestone, personal scope. **Security boundary** — redact() applied at
+      the writer/CLI/engine persistence+output boundaries (not just inside
+      providers); channels always CompositeSink-wrapped; sentinel-secret
+      tests assert a fake token/webhook appears nowhere (SQLite dump, digests,
+      RunOutcome, CLI output). **Publication lifecycle** (schema v13) —
+      runs.publication_status walks collecting→assembled→artifact_committed→
+      delivery_pending→delivered|delivery_failed (+file_only/artifact_failed);
+      real published_at timestamps; diff/hook failures persisted; flock run
+      lock serializes watch/scout/recap/deliver. **Immutable artifacts +
+      outbox** (schema v14) — sha256+renderer recorded per file, atomic
+      writes, delivery_outbox rows per channel attempt; `argus deliver` retries
+      undelivered posts without re-collection (refuses hash-mismatched files,
+      never double-posts); `argus report --run N` verifies the original and
+      writes divergent regenerations to a -rerender file. **Honest language**
+      — "Research shortlist" (was Conviction), "gate-accepted" (was verified),
+      precise survivorship caption. See ARCHITECTURE.md, Discord-safe
+      publication.
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 
