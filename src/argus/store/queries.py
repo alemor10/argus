@@ -251,14 +251,17 @@ def _scorecard(con: sqlite3.Connection, run_id: int, run_started: datetime) -> S
 
 
 def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
-    """Consecutive scout runs, up to and including run_id, in which this
-    ticker was PROPOSED. A scout run where it was absent or excluded breaks
-    the streak — continuity is earned, not assumed. Runs that evaluated
-    NOTHING (screener outage: zero scout_candidates rows) are skipped, not
-    streak-breaking: an outage is not a verdict."""
-    streak = 0
+    """Consecutive CALENDAR WEEKS (ISO), up to and including run_id's week, in
+    which this ticker was PROPOSED — so the '5w' label means five weeks, not
+    five runs. Several scout runs in the same week (e.g. a manual re-run) count
+    once; a week where it was absent or excluded breaks the streak — continuity
+    is earned, not assumed. Runs that evaluated NOTHING (screener outage: zero
+    scout_candidates rows) are skipped, not streak-breaking: an outage is not a
+    verdict."""
+    weeks: set[tuple[int, int]] = set()
     for row in con.execute(
-        "SELECT run_id FROM runs WHERE kind = 'scout' AND run_id <= ? ORDER BY run_id DESC",
+        "SELECT run_id, started_at FROM runs WHERE kind = 'scout' AND run_id <= ? "
+        "ORDER BY run_id DESC",
         (run_id,),
     ):
         evaluated = con.execute(
@@ -272,8 +275,9 @@ def scout_streak(con: sqlite3.Connection, ticker: str, run_id: int) -> int:
         ).fetchone()
         if proposed is None:
             break
-        streak += 1
-    return streak
+        iso = datetime.fromisoformat(row["started_at"]).isocalendar()
+        weeks.add((iso[0], iso[1]))
+    return len(weeks)
 
 
 def scout_rank_history(

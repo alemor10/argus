@@ -296,8 +296,8 @@ def _scorecard_section(recap: RecapReport) -> list[str]:
         lines.append("No proposal has had time to play out yet — the forward log is young.")
         return lines
     lines.append(
-        f"{card.overall_n} names ever proposed — median α "
-        f"{card.overall_median_alpha * 100:+.1f}%, {card.overall_beat_spy}/{card.overall_n} "
+        f"{card.overall_n} names ever proposed — median excess return "
+        f"{card.overall_median_alpha * 100:+.1f}% vs SPY, {card.overall_beat_spy}/{card.overall_n} "
         "beat SPY."
         + (f" ({card.unpriceable} unpriceable, excluded)" if card.unpriceable else "")
     )
@@ -449,8 +449,8 @@ def build_recap_pdf(recap: RecapReport) -> bytes:
         if card is not None and card.overall_n:
             tone = _SECONDARY if card.overall_median_alpha >= 0 else _CRITICAL
             cur.line(
-                f"Scorecard: {card.overall_n} proposals ever — median α "
-                f"{card.overall_median_alpha * 100:+.1f}%, "
+                f"Scorecard: {card.overall_n} proposals ever — median excess return "
+                f"{card.overall_median_alpha * 100:+.1f}% vs SPY, "
                 f"{card.overall_beat_spy}/{card.overall_n} beat SPY.",
                 size=9, weight="bold", color=tone,
             )

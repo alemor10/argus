@@ -896,12 +896,12 @@ class TestScorecard:
 
     def test_overall_line_positive_alpha_wears_the_ok_tone(self):
         text, tone = _scorecard_overall_line(_scorecard(overall_alpha=0.034))
-        assert text == "Overall: 8 names — median α +3.4%, 4/8 beat SPY."
+        assert text == "Overall: 8 names — median excess return +3.4% vs SPY, 4/8 beat SPY."
         assert tone == _SECONDARY
 
     def test_overall_line_negative_alpha_wears_the_critical_tone(self):
         text, tone = _scorecard_overall_line(_scorecard(overall_alpha=-0.021))
-        assert text == "Overall: 8 names — median α -2.1%, 4/8 beat SPY."
+        assert text == "Overall: 8 names — median excess return -2.1% vs SPY, 4/8 beat SPY."
         assert tone == _CRITICAL
 
     def test_caption_mirrors_the_digest_story(self):

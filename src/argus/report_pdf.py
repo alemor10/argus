@@ -719,7 +719,7 @@ def _scout_scorecard(fig: Figure, cur: _Cursor, report: RunReport) -> None:
             _scorecard_empty_line(card), size=8.5, color=_SECONDARY, width=118, max_lines=2
         )
         return
-    columns = ["First proposed", "Names", "Median return", "SPY", "Median α", "Beat SPY"]
+    columns = ["First proposed", "Names", "Median return", "SPY", "Median excess", "Beat SPY"]
     widths = [0.24, 0.12, 0.20, 0.13, 0.17, 0.14]
     _table(fig, cur, columns, _scorecard_rows(card), widths)
     cur.gap(0.004)
@@ -746,7 +746,7 @@ def _scorecard_chart(fig: Figure, cur: _Cursor, card: Scorecard) -> None:
         return
     shown = marks[:_SCORECARD_CHART_CAP]
     cur.gap(0.008)
-    cur.line("Per-name α vs SPY (realized, since first proposed)", size=8.5, color=_SECONDARY)
+    cur.line("Per-name excess return vs SPY (realized, since first proposed)", size=8.5, color=_SECONDARY)
     cur.gap(0.004)
     height = 0.016 * len(shown)
     ax = fig.add_axes((0.16, cur.y - height, 0.72, height))
@@ -806,7 +806,7 @@ def _scorecard_overall_line(card: Scorecard) -> tuple[str, str]:
     n = card.overall_n
     text = (
         f"Overall: {n} name{'s' if n != 1 else ''} — "
-        f"median α {_pct(card.overall_median_alpha)}, "
+        f"median excess return {_pct(card.overall_median_alpha)} vs SPY, "
         f"{card.overall_beat_spy}/{n} beat SPY."
     )
     tone = _SECONDARY if card.overall_median_alpha >= 0 else _CRITICAL

@@ -25,11 +25,11 @@ No names flagged deteriorating this run.
 
 ## Scorecard — how past proposals have done vs SPY
 
-| First proposed | Names | Median return | SPY | Median α | Beat SPY |
+| First proposed | Names | Median return | SPY | Median excess | Beat SPY |
 | --- | --- | --- | --- | --- | --- |
 | ≤ 1 week | 1 | +10.0% | +4.0% | +6.0% | 1/1 |
 
-**Overall:** 1 names ever proposed — median α +6.0%, 1/1 beat SPY.
+**Overall:** 1 names ever proposed — median excess return +6.0% vs SPY, 1/1 beat SPY.
 
 _Total return incl. dividends (adjusted close), every proposal counted from its first appearance (no survivorship), never revised. The market is the answer key — Argus never grades itself._
 

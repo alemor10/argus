@@ -286,7 +286,7 @@ def _scorecard_section(report: RunReport) -> list[str]:
             lines.append("No proposal has had time to play out yet — the forward log starts now.")
         return lines
     lines += [
-        "| First proposed | Names | Median return | SPY | Median α | Beat SPY |",
+        "| First proposed | Names | Median return | SPY | Median excess | Beat SPY |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for c in card.cohorts:
@@ -296,8 +296,8 @@ def _scorecard_section(report: RunReport) -> list[str]:
         )
     lines += [
         "",
-        f"**Overall:** {card.overall_n} names ever proposed — median α "
-        f"{_pct(card.overall_median_alpha)}, {card.overall_beat_spy}/{card.overall_n} beat SPY."
+        f"**Overall:** {card.overall_n} names ever proposed — median excess return "
+        f"{_pct(card.overall_median_alpha)} vs SPY, {card.overall_beat_spy}/{card.overall_n} beat SPY."
         + (f" ({card.unpriceable} unpriceable, excluded)" if card.unpriceable else ""),
         "",
         "_Total return incl. dividends (adjusted close), every proposal counted "
