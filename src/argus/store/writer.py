@@ -12,6 +12,13 @@ CHECK only enforces exactly-one-value.
 All datetime parameters MUST be timezone-aware UTC (models.require_aware is
 the shared guard) — naive input is rejected at the seam, not discovered as a
 TypeError mid-pipeline.
+
+Free-text error/note strings are redacted HERE, at the persistence boundary —
+not only inside individual providers. Anything stored in runs.notes,
+run_tickers.error, or run_sources.error is re-rendered in every digest, PDF,
+and `report --run N` regeneration forever, so a secret that slips past an
+adapter (an httpx error embeds the request URL; for Finnhub that carries
+?token=, for a webhook the URL IS the secret) must die at this seam.
 """
 
 import json
@@ -38,6 +45,7 @@ from argus.models import (
     TickerContext,
     require_aware,
 )
+from argus.redact import redact
 
 
 def begin_run(
@@ -191,7 +199,14 @@ def write_ticker_result(
             con.execute(
                 "INSERT INTO run_sources (run_id, ticker, source, status, error, latency_ms) "
                 "VALUES (?, ?, ?, ?, ?, ?)",
-                (run_id, context.ticker, h.source.value, h.status, h.error, h.latency_ms),
+                (
+                    run_id,
+                    context.ticker,
+                    h.source.value,
+                    h.status,
+                    redact(h.error) if h.error else h.error,
+                    h.latency_ms,
+                ),
             )
         con.execute(
             "INSERT INTO run_tickers "
@@ -201,7 +216,7 @@ def write_ticker_result(
                 run_id,
                 context.ticker,
                 status,
-                error,
+                redact(error) if error else error,
                 context.thesis,
                 context.thresholds.model_dump_json(),
                 json.dumps([c.model_dump(mode="json") for c in context.thesis_checks]),
@@ -381,11 +396,12 @@ def write_scorecard_marks(
 
 def append_run_note(con: sqlite3.Connection, *, run_id: int, note: str) -> None:
     """Append a line to runs.notes — rendered in the digest header. The one
-    sanctioned post-finish update besides finish_run itself."""
+    sanctioned post-finish update besides finish_run itself. Redacted at this
+    boundary: notes frequently carry provider error text."""
     with con:
         con.execute(
             "UPDATE runs SET notes = COALESCE(notes || '; ', '') || ? WHERE run_id = ?",
-            (note, run_id),
+            (redact(note), run_id),
         )
 
 
@@ -402,7 +418,7 @@ def finish_run(
         con.execute(
             "UPDATE runs SET status = ?, finished_at = ?, notes = COALESCE(?, notes) "
             "WHERE run_id = ?",
-            (status, finished_at.isoformat(), notes, run_id),
+            (status, finished_at.isoformat(), redact(notes) if notes else notes, run_id),
         )
 
 

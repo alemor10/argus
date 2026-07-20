@@ -2,7 +2,7 @@
 
 Status: PARTIAL — some tickers or sources failed this run; degradation is detailed under Data health.
 
-## Conviction — the graded shortlist
+## Research shortlist — screened candidates, graded vs SPY
 
 _No new names cleared the screen this week — the shortlist held._
 
@@ -12,7 +12,7 @@ _No new names cleared the screen this week — the shortlist held._
 
 _'#' is the global screen rank; gaps are names excluded after enrichment or sector-capped._
 
-Screen (screener claims, verified independently above):
+Screen (screener claims — the table above carries gate-accepted values):
 - **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30% · vs industry median fwd P/E 15 (Widgets, n=3)
 
 ## Worth watching — relative value per sector (screener claims)
@@ -31,7 +31,7 @@ No names flagged deteriorating this run.
 
 **Overall:** 1 names ever proposed — median excess return +6.0% vs SPY, 1/1 beat SPY.
 
-_Total return incl. dividends (adjusted close), every proposal counted from its first appearance (no survivorship), never revised. The market is the answer key — Argus never grades itself._
+_Total return incl. dividends (adjusted close), every proposal counted from its first appearance, never revised; names that cannot be priced (delisted / fetch-dark) are excluded from the medians and counted above. The market is the answer key — Argus never grades itself._
 
 ## Excluded after enrichment
 

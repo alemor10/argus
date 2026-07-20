@@ -131,7 +131,8 @@ _PROMOTE_LINE = 'Argus proposes; the thesis is yours — argus promote {ticker} 
 _SCORECARD_EMPTY = "No proposal has had time to play out yet — the forward log starts now."
 _SCORECARD_CAPTION = (
     "Total return incl. dividends; every proposal counted from first appearance, "
-    "never revised — the market is the answer key."
+    "never revised; unpriceable names (delisted / fetch-dark) are excluded from "
+    "medians and counted — the market is the answer key."
 )
 
 # Human-facing field names — mirrors the markdown digest's labels exactly
@@ -469,7 +470,7 @@ def _scout_proposals_block(fig: Figure, cur: _Cursor, report: RunReport) -> None
     snapshots = {t.context.ticker: t.snapshot for t in report.tickers}
     profiles = {t.context.ticker: t.profile for t in report.tickers}
 
-    cur.line("Conviction — the graded shortlist", size=11, weight="bold")
+    cur.line("Research shortlist — screened candidates, graded vs SPY", size=11, weight="bold")
     cur.gap(0.008)
     if not report.scout and report.status == "failed":
         # An outage is not a verdict: "evaluated nothing" must never read as

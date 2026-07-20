@@ -161,7 +161,7 @@ def _proposals_section(report: RunReport) -> list[str]:
     screen-reasons column, labeled as claims."""
     proposed = [p for p in report.scout if p.status == "proposed"]
     leaders = [p for p in report.scout if p.status == "leader"]
-    lines = ["## Conviction — the graded shortlist", ""]
+    lines = ["## Research shortlist — screened candidates, graded vs SPY", ""]
     if not report.scout and report.status == "failed":
         # An outage is not a verdict: "evaluated nothing" must never read as
         # "nothing passed" — those are different statements.
@@ -230,7 +230,7 @@ def _proposals_section(report: RunReport) -> list[str]:
         lines.append("")
     if not proposed:
         return lines
-    lines.append("Screen (screener claims, verified independently above):")
+    lines.append("Screen (screener claims — the table above carries gate-accepted values):")
     profiles = {t.context.ticker: t.profile for t in report.tickers}
     for p in proposed:
         profile = profiles.get(p.ticker)
@@ -302,8 +302,9 @@ def _scorecard_section(report: RunReport) -> list[str]:
         + (f" ({card.unpriceable} unpriceable, excluded)" if card.unpriceable else ""),
         "",
         "_Total return incl. dividends (adjusted close), every proposal counted "
-        "from its first appearance (no survivorship), never revised. The market "
-        "is the answer key — Argus never grades itself._",
+        "from its first appearance, never revised; names that cannot be priced "
+        "(delisted / fetch-dark) are excluded from the medians and counted above. "
+        "The market is the answer key — Argus never grades itself._",
     ]
     return lines
 
@@ -1417,7 +1418,10 @@ def _discord_headline(markdown: str) -> str:
     for line in lines:
         if line.startswith("## "):
             # Watch digests hook with Changes; scout digests with Proposals.
-            in_changes = line.strip() in ("## Changes", "## Conviction — the graded shortlist")
+            in_changes = line.strip() in (
+                "## Changes",
+                "## Research shortlist — screened candidates, graded vs SPY",
+            )
             continue
         if in_changes and line.strip():
             changes.append(line)

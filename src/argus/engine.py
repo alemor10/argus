@@ -37,6 +37,7 @@ from argus.models import (
     TickerContext,
     require_aware,
 )
+from argus.redact import redact
 from argus.sources.base import DataSource
 from argus.store import queries, writer
 
@@ -131,7 +132,10 @@ def _fetch_ticker(ticker: str, sources: Sequence[DataSource]) -> _TickerFetch:
                 SourceHealth(
                     source=source.source_id,
                     status="error",
-                    error=str(exc) or type(exc).__name__,
+                    # Redacted at creation: this string is stored, rendered in
+                    # every digest, AND joined into run_tickers.error — an
+                    # httpx message can embed a secret-bearing request URL.
+                    error=redact(str(exc)) or type(exc).__name__,
                     latency_ms=int((time.perf_counter() - started) * 1000),
                 )
             )
@@ -231,7 +235,7 @@ def run(
                 actions=[],
                 source_health=[],
                 status="failed",
-                error=f"unexpected: {exc}",
+                error=f"unexpected: {redact(str(exc))}",
             )
             status = "failed"
         if status != "failed" and kind == "watch":
@@ -312,7 +316,7 @@ def run(
             try:
                 attachments = tuple(artifact_builder(report))
             except Exception as exc:  # attachments are optional; the digest is not
-                attachment_error = f"report attachment failed: {exc}"
+                attachment_error = f"report attachment failed: {redact(str(exc))}"
                 writer.append_run_note(con, run_id=run_id, note=attachment_error)
         markdown = render(report)
         digest_path, delivery_error = _write_digest(

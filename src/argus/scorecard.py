@@ -5,9 +5,10 @@ SPY), compute how every proposed name has actually done since it first
 surfaced, versus the market over the same window. No prediction — realized
 data only, and the market is the answer key (the engine never grades itself).
 
-Honest by construction: EVERY name scout ever proposed is scored (no
-survivorship — a name that dropped off the shortlist is still tracked from its
-first proposal), total return uses adjusted closes (dividends + splits
+Honest by construction: EVERY name scout ever proposed is eligible for
+scoring — a name that dropped off the shortlist is still tracked from its
+first proposal; names that cannot be priced at both endpoints are excluded
+from the medians and DISCLOSED as a count, never silently folded in, total return uses adjusted closes (dividends + splits
 included on both legs), and the marks are persisted immutably per scoring run
 so the scorecard is a forward log, never retroactively revised.
 """

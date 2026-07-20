@@ -37,6 +37,7 @@ from argus.config import (
 from argus.fields import Source
 from argus.digest import (
     CompositeSink,
+    DeliveryError,
     DigestSink,
     DiscordDigestSink,
     EmailDigestSink,
@@ -273,8 +274,12 @@ def _compose_sinks(
     if deliver is DeliverPolicy.NEVER:
         return file_sink, None
     if deliver is DeliverPolicy.EVENTS_ONLY and channels:
-        gated = channels[0] if len(channels) == 1 else CompositeSink(*channels)
-        return file_sink, gated
+        # ALWAYS CompositeSink-wrapped, even a single channel: CompositeSink is
+        # the redaction + DeliveryError boundary. A bare DiscordDigestSink here
+        # would raise a raw httpx error whose message embeds the webhook URL —
+        # uncaught by the engine (which handles DeliveryError only), it would
+        # print the secret in a CLI traceback.
+        return file_sink, CompositeSink(*channels)
     if channels:
         return CompositeSink(file_sink, *channels), None
     return file_sink, None
@@ -749,7 +754,9 @@ def recap(
             others = len(calendar) - len(week_ahead)
             note = f"{others} more companies report next week (unfiltered count)."
         except Exception as exc:  # the edition must land; the calendar is context
-            note = f"week-ahead calendar unavailable: {exc}"
+            from argus.redact import redact
+
+            note = f"week-ahead calendar unavailable: {redact(str(exc))}"
     else:
         note = "week-ahead calendar not configured (FINNHUB_API_KEY / bellwethers)."
 
@@ -781,20 +788,23 @@ def recap(
     except ValueError as exc:
         typer.echo(str(exc), err=True)
         raise typer.Exit(1) from exc
-    failures = []
-    for channel in channels:
+    # The SAME protected delivery abstraction as watch/scout: CompositeSink is
+    # the redaction + error-aggregation boundary (a raw channel loop here once
+    # leaked webhook-bearing httpx errors into the failure echo).
+    delivery_failure: str | None = None
+    if channels:
         try:
-            channel.write(
+            CompositeSink(*channels).write(
                 markdown,
                 run_id=report.scout_run_id or 0,
                 as_of=ending,
                 attachments=tuple(attachments),
             )
-        except Exception as exc:  # undelivered = unseen on a headless box
-            failures.append(f"{type(channel).__name__}: {exc}")
+        except DeliveryError as exc:  # undelivered = unseen on a headless box
+            delivery_failure = str(exc)
     typer.echo(f"Sunday Edition: {md_path}")
-    if failures:
-        typer.echo("Edition written but NOT delivered: " + "; ".join(failures), err=True)
+    if delivery_failure:
+        typer.echo(f"Edition written but NOT delivered: {delivery_failure}", err=True)
         raise typer.Exit(1)
 
 
@@ -820,7 +830,7 @@ def consider(
 ) -> None:
     """Add a name to the consider list: tracked through the full fetch→gate
     pipeline and shown in every issue, no thesis required. Graduate it with
-    `argus promote` when conviction forms. Human-invoked only."""
+    `argus promote` when research-shortlist forms. Human-invoked only."""
     symbol = ticker.strip().upper()
     if not _TICKER_RE.match(symbol):
         typer.echo(f"'{ticker}' does not look like a ticker symbol.", err=True)

@@ -270,7 +270,7 @@ def sector_board(
     the value-trap guard — so the absolute margin/ROE/leverage gates a bank,
     utility, or REIT can never meet are deliberately dropped and every sector
     can fill. Fewer than `per_sector` when a sector is genuinely thin. Screener
-    claims, never gated: the conviction shortlist stays the graded list."""
+    claims, never gated: the research shortlist stays the graded list."""
     excluded = {_bare_symbol(t) for t in exclude}
     by_sector: dict[str, list[ScreenerRow]] = {}
     for row in rows:

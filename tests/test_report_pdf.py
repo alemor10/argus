@@ -907,7 +907,8 @@ class TestScorecard:
     def test_caption_mirrors_the_digest_story(self):
         assert _SCORECARD_CAPTION == (
             "Total return incl. dividends; every proposal counted from first "
-            "appearance, never revised — the market is the answer key."
+            "appearance, never revised; unpriceable names (delisted / fetch-dark) "
+            "are excluded from medians and counted — the market is the answer key."
         )
 
     def test_empty_line_when_run_carries_no_scorecard(self):

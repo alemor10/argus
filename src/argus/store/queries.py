@@ -198,8 +198,8 @@ def company_profile(con: sqlite3.Connection, ticker: str) -> CompanyProfile | No
 
 def first_proposals(con: sqlite3.Connection) -> list[tuple[str, date_, int]]:
     """Every name scout has EVER proposed, with the date AND run_id it FIRST
-    surfaced — the scorecard's universe (no survivorship; a dropped name
-    stays tracked from its first proposal). Eligibility keys on the run_id
+    surfaced — the scorecard's universe (a dropped name
+    stays tracked from its first proposal; unpriceable names are counted). Eligibility keys on the run_id
     (monotonic) rather than the date, so a clock step-back can never
     retroactively change an older run's scorecard."""
     rows = con.execute(

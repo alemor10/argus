@@ -2,7 +2,7 @@
 store round-trip (persisted marks reproduce the digest scorecard).
 
 Honesty invariants under test: every proposal is scored from its first
-appearance (no survivorship), unpriceable names are counted-and-excluded (never
+appearance (dropped names still tracked), unpriceable names are counted-and-excluded (never
 a silent zero), and returns use both endpoints of the same adjusted series.
 """
 
