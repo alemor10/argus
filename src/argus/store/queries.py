@@ -270,7 +270,7 @@ def _scorecard(con: sqlite3.Connection, run_id: int, run_started: datetime) -> S
     # Eligible = names first proposed in an EARLIER run (run_id monotonic).
     eligible = [ticker for ticker, _d, first_run in first_proposals(con) if first_run < run_id]
     rows = con.execute(
-        """SELECT ticker, first_proposed_at, weeks_out, name_return, spy_return
+        """SELECT ticker, first_proposed_at, horizon_weeks, name_return, spy_return
            FROM scorecard_marks WHERE run_id = ?""",
         (run_id,),
     ).fetchall()
@@ -280,13 +280,17 @@ def _scorecard(con: sqlite3.Connection, run_id: int, run_started: datetime) -> S
         ScorecardMark(
             ticker=row["ticker"],
             first_proposed_at=date_.fromisoformat(row["first_proposed_at"]),
-            weeks_out=row["weeks_out"],
+            horizon_weeks=row["horizon_weeks"],
             name_return=row["name_return"],
             spy_return=row["spy_return"],
         )
         for row in rows
     ]
-    unpriceable = max(len(eligible) - len(marks), 0)
+    # Unpriceable = eligible names with no mark of ANY kind this run (not even
+    # the entry sentinel). A priced-but-too-young name has a sentinel, so it is
+    # counted as pending inside summarize, never as a missing-data gap.
+    priced = {m.ticker for m in marks}
+    unpriceable = max(len(set(eligible)) - len(priced & set(eligible)), 0)
     return scorecard_mod.summarize(marks, run_started.date(), unpriceable)
 
 

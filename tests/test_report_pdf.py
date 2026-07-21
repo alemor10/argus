@@ -860,23 +860,27 @@ class TestDeterminism:
 
 
 def _scorecard(*, overall_alpha=0.034):
-    """A populated scout scorecard: two cohorts (one beating SPY, one lagging)
-    plus an overall roll-up whose median α the caller varies to exercise tone."""
+    """A populated scout scorecard: two matured horizons (4wk beating SPY, 13wk
+    lagging), both clearing the min-sample gate, plus a headline roll-up whose
+    median α the caller varies to exercise tone."""
     return Scorecard(
         as_of=date(2026, 7, 12),
         cohorts=(
             ScorecardCohort(
-                label="4-8 weeks ago", n=5, median_return=0.082,
-                median_spy=0.041, median_alpha=0.041, beat_spy=3,
+                label="4 weeks", horizon_weeks=4, n=5, median_return=0.082,
+                median_spy=0.041, median_alpha=0.041, beat_spy=3, enough=True,
             ),
             ScorecardCohort(
-                label="9-13 weeks ago", n=3, median_return=-0.015,
-                median_spy=0.022, median_alpha=-0.037, beat_spy=1,
+                label="13 weeks", horizon_weeks=13, n=3, median_return=-0.015,
+                median_spy=0.022, median_alpha=-0.037, beat_spy=1, enough=True,
             ),
         ),
         overall_n=8,
+        overall_label="13 weeks",
         overall_median_alpha=overall_alpha,
-        overall_beat_spy=4,
+        overall_beat_spy=1,
+        overall_horizon_n=3,
+        pending=2,
         unpriceable=1,
     )
 
@@ -888,27 +892,49 @@ def _report_with_scorecard(card) -> RunReport:
 class TestScorecard:
     def test_cohort_rows_are_signed_percents(self):
         # Pure-helper seam: the compressed PDF text is asserted here, one row
-        # per cohort, every fraction rendered as a signed percent.
+        # per matured horizon, every fraction rendered as a signed percent.
         assert _scorecard_rows(_scorecard()) == [
-            ["4-8 weeks ago", "5", "+8.2%", "+4.1%", "+4.1%", "3/5"],
-            ["9-13 weeks ago", "3", "-1.5%", "+2.2%", "-3.7%", "1/3"],
+            ["4 weeks", "5", "+8.2%", "+4.1%", "+4.1%", "3/5"],
+            ["13 weeks", "3", "-1.5%", "+2.2%", "-3.7%", "1/3"],
         ]
+
+    def test_gated_horizon_withholds_medians_but_shows_count(self):
+        card = Scorecard(
+            as_of=date(2026, 7, 12),
+            cohorts=(
+                ScorecardCohort(
+                    label="4 weeks", horizon_weeks=4, n=2, median_return=0.05,
+                    median_spy=0.01, median_alpha=0.04, beat_spy=2, enough=False,
+                ),
+            ),
+            overall_n=2,
+        )
+        assert _scorecard_rows(card) == [["4 weeks", "2", "—", "—", "—", "—"]]
 
     def test_overall_line_positive_alpha_wears_the_ok_tone(self):
         text, tone = _scorecard_overall_line(_scorecard(overall_alpha=0.034))
-        assert text == "Overall: 8 names — median excess return +3.4% vs SPY, 4/8 beat SPY."
+        assert text == (
+            "Best-seasoned read (13 weeks): median excess +3.4% vs SPY, 1/3 beat SPY "
+            "· 8 matured to ≥1 horizon, 2 maturing, 1 unpriceable."
+        )
         assert tone == _SECONDARY
 
     def test_overall_line_negative_alpha_wears_the_critical_tone(self):
         text, tone = _scorecard_overall_line(_scorecard(overall_alpha=-0.021))
-        assert text == "Overall: 8 names — median excess return -2.1% vs SPY, 4/8 beat SPY."
+        assert text.startswith("Best-seasoned read (13 weeks): median excess -2.1% vs SPY")
         assert tone == _CRITICAL
+
+    def test_overall_line_no_gated_horizon_is_muted(self):
+        card = Scorecard(as_of=date(2026, 7, 12), overall_n=1, pending=1)
+        text, tone = _scorecard_overall_line(card)
+        assert text.startswith("No horizon has 3+ matured names yet")
+        assert tone == _MUTED
 
     def test_caption_mirrors_the_digest_story(self):
         assert _SCORECARD_CAPTION == (
-            "Total return incl. dividends; every proposal counted from first "
-            "appearance, never revised; unpriceable names (delisted / fetch-dark) "
-            "are excluded from medians and counted — the market is the answer key."
+            "Each horizon is the realized return from entry to the close that many "
+            "weeks later (adjusted, incl. dividends) vs SPY over the identical window "
+            "— locked once measured, never revised. The market is the answer key."
         )
 
     def test_empty_line_when_run_carries_no_scorecard(self):
@@ -917,11 +943,16 @@ class TestScorecard:
             "No proposal has had time to play out yet — the forward log starts now."
         )
 
-    def test_empty_line_distinguishes_unpriceable_from_nothing_matured(self):
-        # Review finding: an all-unpriceable run (fetch down) must NOT read as
-        # "nothing has matured" — absence of signal ≠ absence of data.
-        empty = Scorecard(as_of=date(2026, 7, 12), unpriceable=2)  # overall_n == 0
-        assert _scorecard_empty_line(empty) == (
+    def test_empty_line_distinguishes_pending_from_unpriceable(self):
+        # Absence of signal (names still maturing) must NOT read as absence of
+        # data (fetch down) — nor the reverse.
+        pending = Scorecard(as_of=date(2026, 7, 12), pending=3)  # overall_n == 0
+        assert _scorecard_empty_line(pending) == (
+            "No proposal has reached the 4-week mark yet — 3 name(s) are priced and "
+            "maturing; grading begins at 4 weeks."
+        )
+        unpriceable = Scorecard(as_of=date(2026, 7, 12), unpriceable=2)
+        assert _scorecard_empty_line(unpriceable) == (
             "Price data was unavailable for all 2 eligible past proposal(s) this run "
             "— scoring resumes when it returns."
         )
@@ -962,7 +993,7 @@ class TestScorecard:
         # back page; the render stays byte-deterministic (no clock, no random).
         marks = tuple(
             ScorecardMark(
-                ticker=t, first_proposed_at=date(2026, 6, 1), weeks_out=6,
+                ticker=t, first_proposed_at=date(2026, 6, 1), horizon_weeks=4,
                 name_return=nr, spy_return=0.02,
             )
             for t, nr in (("AAA", 0.12), ("BBB", -0.05), ("CCC", 0.0))

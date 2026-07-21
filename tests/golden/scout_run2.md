@@ -13,7 +13,9 @@ _No new names cleared the screen this week — the shortlist held._
 _'#' is the global screen rank; gaps are names excluded after enrichment or sector-capped._
 
 Screen (screener claims — the table above carries gate-accepted values):
-- **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30% · vs industry median fwd P/E 15 (Widgets, n=3)
+- **CLEANCO** — fwd P/E 15.0 ≤ 25; rev growth +15.0% ≥ 10%; gross margin 55.0% ≥ 40%; op margin 20.0% ≥ 12%; ROE 25.0% ≥ 15%; D/E 0.40 ≤ 1; EPS trend +25.0% > -30% · vs industry median fwd P/E 15 (Widgets, n=3) · _Flags: screener-claimed only (gates did not confirm): revenue growth, operating margin, ROE, D/E; price is single-source (no cross-check this run)_
+
+_Screen exit — a name leaves the shortlist if: forward P/E above 25 · revenue growth below 10% · gross margin below 40% · operating margin below 12% · ROE below 15% · D/E above 1 · EPS trend at or below -30%._
 
 ## Worth watching — relative value per sector (screener claims)
 
@@ -25,13 +27,7 @@ No names flagged deteriorating this run.
 
 ## Scorecard — how past proposals have done vs SPY
 
-| First proposed | Names | Median return | SPY | Median excess | Beat SPY |
-| --- | --- | --- | --- | --- | --- |
-| ≤ 1 week | 1 | +10.0% | +4.0% | +6.0% | 1/1 |
-
-**Overall:** 1 names ever proposed — median excess return +6.0% vs SPY, 1/1 beat SPY.
-
-_Total return incl. dividends (adjusted close), every proposal counted from its first appearance, never revised; names that cannot be priced (delisted / fetch-dark) are excluded from the medians and counted above. The market is the answer key — Argus never grades itself._
+No proposal has reached the 4-week mark yet — 1 name(s) are priced and maturing; grading begins at 4 weeks.
 
 ## Excluded after enrichment
 

@@ -6,7 +6,7 @@ import sqlite3
 from importlib import resources
 from pathlib import Path
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # version N → the script that upgrades N to N+1. Each step runs in its own
 # transaction with its user_version bump, so a crash mid-upgrade resumes
@@ -211,6 +211,26 @@ CREATE TABLE IF NOT EXISTS delivery_outbox (
 );
 CREATE INDEX IF NOT EXISTS idx_outbox_undelivered
     ON delivery_outbox (channel) WHERE delivered_at IS NULL;
+""",
+    # v1.22: the scorecard moves from "total return since first proposed" (a
+    # value that quietly re-prices every run) to FIXED 4/13/26/52-week horizons
+    # (one row per name per matured horizon; horizon_weeks=0 = entry sentinel).
+    # The old age-cohort marks are semantically incompatible — a total-return
+    # mark cannot be reinterpreted as a horizon mark — so they are dropped, not
+    # migrated. This costs nothing real: the forward log is young (no proposal
+    # has reached even the 4-week mark), and future scout runs repopulate under
+    # the new definition. SQLite cannot alter a PK, so the table is rebuilt.
+    14: """
+DROP TABLE IF EXISTS scorecard_marks;
+CREATE TABLE scorecard_marks (
+    run_id            INTEGER NOT NULL REFERENCES runs(run_id),
+    ticker            TEXT    NOT NULL,
+    first_proposed_at TEXT    NOT NULL,
+    horizon_weeks     INTEGER NOT NULL,
+    name_return       REAL    NOT NULL,
+    spy_return        REAL    NOT NULL,
+    PRIMARY KEY (run_id, ticker, horizon_weeks)
+) WITHOUT ROWID;
 """,
 }
 

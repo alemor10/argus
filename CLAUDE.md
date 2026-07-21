@@ -192,6 +192,22 @@ A read-only tool with two capabilities on one fundamentals-and-quality engine:
       — "Research shortlist" (was Conviction), "gate-accepted" (was verified),
       precise survivorship caption. See ARCHITECTURE.md, Discord-safe
       publication.
+- [x] Evidence contract + honest scorecard (v1.22, 2026-07-21): the
+      trustworthiness slice before the closed beta. **Fixed-horizon scorecard**
+      (schema v15) — grades past proposals at 4/13/26/52-week horizons instead
+      of "total return since proposed" (which quietly re-priced every run); a
+      horizon return is locked once measured; one row per (run, name, matured
+      horizon) + an entry sentinel; disjoint matured/pending/unpriceable buckets
+      so "too young" never reads as "no data"; min-sample gate (n≥3) withholds a
+      horizon's medians. Old age-cohort marks dropped by migration (log too young
+      to matter). **Evidence contract** (`evidence.py`, pure) — a four-state
+      backing label per metric (corroborated / single-source / claim-only /
+      missing), screen-exit conditions read back from persisted reason strings
+      (the human's thresholds as factual falsification lines), and factual data
+      flags (near-boundary, claim-only/single-source core metrics, quarantine) —
+      provenance and thresholds as fact, never a forecast or opinion. See
+      ARCHITECTURE.md, Scout self-scoring. NEXT: stop building — run the closed
+      beta (roadmap items 3–5 deferred).
 - [ ] ETF look-through concentration (portfolio's true single-name exposure):
       needs holdings you own; distinct from the rebalancing feature above.
 

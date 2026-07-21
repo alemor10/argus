@@ -778,16 +778,20 @@ class EtfRebalance(BaseModel):
 
 
 class ScorecardMark(BaseModel):
-    """One name's realized standing as of a scoring run — total return since
-    scout first proposed it, vs SPY over the same window. Immutable once
-    written; the market is the answer key."""
+    """One name's realized return over ONE fixed horizon — entry (first
+    tradeable close on/after the proposal) to the close `horizon_weeks` later,
+    vs SPY over the identical window. Immutable once written; the market is the
+    answer key. `horizon_weeks == 0` is the ENTRY sentinel: the name was
+    priceable at entry this scoring run but this row grades nothing (returns
+    are 0) — it lets the reader distinguish 'priced but too young' from
+    'unpriceable' when reproducing from the store alone."""
 
     model_config = ConfigDict(frozen=True)
 
     ticker: str
     first_proposed_at: date
-    weeks_out: int
-    name_return: float  # fraction
+    horizon_weeks: int  # 0 = entry sentinel; else 4 | 13 | 26 | 52
+    name_return: float  # fraction, entry → horizon close
     spy_return: float
 
     @property
@@ -796,30 +800,43 @@ class ScorecardMark(BaseModel):
 
 
 class ScorecardCohort(BaseModel):
-    """Names grouped by how long ago scout first proposed them."""
+    """One fixed horizon (4/13/26/52 weeks): the names that have MATURED to it,
+    and their median realized standing vs SPY. `enough` is the min-sample gate —
+    False means the medians are withheld (too few names to read as a signal),
+    though `n` is always shown so coverage is honest."""
 
     model_config = ConfigDict(frozen=True)
 
     label: str
+    horizon_weeks: int
     n: int
     median_return: float
     median_spy: float
     median_alpha: float
     beat_spy: int  # count with alpha > 0
+    enough: bool = True  # n >= the min-sample threshold
 
 
 class Scorecard(BaseModel):
     """The scout self-scoring summary rendered in the digest — derived
-    deterministically from the run's persisted marks, so it reproduces."""
+    deterministically from the run's persisted marks, so it reproduces.
+    `overall_n` counts names that have matured to at least one horizon;
+    `pending` counts names priceable at entry but too young for any horizon
+    yet; `unpriceable` counts eligible names with no entry price this run. The
+    three are disjoint, so absence of signal (young) never reads as absence of
+    data (unpriceable)."""
 
     model_config = ConfigDict(frozen=True)
 
     as_of: date
     cohorts: tuple[ScorecardCohort, ...] = ()
-    overall_n: int = 0
-    overall_median_alpha: float = 0.0
-    overall_beat_spy: int = 0
-    unpriceable: int = 0  # proposed names whose history could not be fetched
+    overall_n: int = 0  # names matured to ≥1 horizon
+    overall_label: str = ""  # the longest horizon meeting the min-sample gate ("" = none)
+    overall_median_alpha: float = 0.0  # that horizon's median excess (0.0 when no headline)
+    overall_beat_spy: int = 0  # beat-SPY count at that horizon
+    overall_horizon_n: int = 0  # names at that headline horizon
+    pending: int = 0  # priced at entry but no horizon matured yet
+    unpriceable: int = 0  # eligible names with no entry price this run
     marks: tuple[ScorecardMark, ...] = ()  # per-name realized standing (for the PDF chart)
 
 
