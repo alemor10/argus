@@ -34,7 +34,9 @@ from argus.models import (
     ThesisDrift,
     TickerReport,
 )
+from argus.evidence import data_flags, screen_exit_conditions
 from argus.redact import redact
+from argus.scorecard import MIN_SAMPLE
 from argus.thesis import evaluate_thesis_checks
 
 # Human-facing field names. Adding a Field without a label falls back to the
@@ -249,9 +251,24 @@ def _proposals_section(report: RunReport) -> list[str]:
                 f" · vs industry median fwd P/E {median:g} "
                 f"({_cell(str((p.peer_context or {}).get('industry') or 'industry'))}{count_note})"
             )
+        # Factual, per-name evidence flags (near a screen boundary, claim-only or
+        # single-source metrics, quarantine) — data vs the stated lines, never a
+        # judgement. Empty for a cleanly-corroborated name, and that silence is
+        # itself honest.
+        flags = data_flags(p.screen_reasons, p.screener_metrics, snapshots.get(p.ticker))
+        flag_note = f" · _Flags: {_cell('; '.join(flags))}_" if flags else ""
         lines.append(
             f"- **{_cell(p.ticker)}**{business} — "
-            f"{_cell('; '.join(p.screen_reasons.values()))}{peer_note}"
+            f"{_cell('; '.join(p.screen_reasons.values()))}{peer_note}{flag_note}"
+        )
+    # The screen-exit conditions are one screen-level fact (identical for every
+    # proposal — they ARE the screen definition), so they are stated once: the
+    # human's thresholds restated as the factual lines that drop a name.
+    exits = screen_exit_conditions(proposed[0].screen_reasons)
+    if exits:
+        lines.append("")
+        lines.append(
+            "_Screen exit — a name leaves the shortlist if: " + " · ".join(exits) + "._"
         )
     return lines
 
@@ -269,16 +286,28 @@ def _finite_number(value: object) -> bool:
 
 
 def _scorecard_section(report: RunReport) -> list[str]:
-    """Grade the grader: how scout's past proposals have actually done vs SPY.
-    Realized data, forward log — the market is the answer key, never the
-    engine. Empty until proposals have had time to play out."""
+    """Grade the grader: how scout's past proposals have actually done vs SPY,
+    at FIXED 4/13/26/52-week horizons. Realized data, forward log — a horizon
+    return is locked once measured, the market is the answer key, never the
+    engine. Empty until proposals reach the 4-week mark."""
     card = report.scorecard
     lines = ["## Scorecard — how past proposals have done vs SPY", ""]
     if card is None or card.overall_n == 0:
-        # Absence of signal must be distinguishable from absence of data: a
-        # card with unpriceable>0 means eligible names existed but could not
-        # be priced this run (fetch down / delisted), NOT "nothing has matured".
-        if card and card.unpriceable:
+        # Absence of signal must be distinguishable from absence of data, three
+        # ways: names too young to have reached any horizon (pending), names
+        # that could not be priced at all (unpriceable), or simply nothing
+        # eligible yet.
+        if card and card.pending:
+            lines.append(
+                f"No proposal has reached the 4-week mark yet — {card.pending} name(s) are "
+                "priced and maturing; grading begins at 4 weeks."
+                + (
+                    f" ({card.unpriceable} could not be priced this run.)"
+                    if card.unpriceable
+                    else ""
+                )
+            )
+        elif card and card.unpriceable:
             lines.append(
                 f"Price data was unavailable for all {card.unpriceable} eligible past "
                 "proposal(s) this run — scoring resumes when it returns."
@@ -287,24 +316,43 @@ def _scorecard_section(report: RunReport) -> list[str]:
             lines.append("No proposal has had time to play out yet — the forward log starts now.")
         return lines
     lines += [
-        "| First proposed | Names | Median return | SPY | Median excess | Beat SPY |",
+        "| Horizon | Names | Median return | SPY | Median excess | Beat SPY |",
         "| --- | --- | --- | --- | --- | --- |",
     ]
     for c in card.cohorts:
-        lines.append(
-            f"| {c.label} | {c.n} | {_pct(c.median_return)} | {_pct(c.median_spy)} "
-            f"| {_pct(c.median_alpha)} | {c.beat_spy}/{c.n} |"
+        if c.enough:
+            lines.append(
+                f"| {c.label} | {c.n} | {_pct(c.median_return)} | {_pct(c.median_spy)} "
+                f"| {_pct(c.median_alpha)} | {c.beat_spy}/{c.n} |"
+            )
+        else:
+            # Min-sample gate: too few names to read as a signal — show the
+            # count, withhold the medians (never a misleading one-name median).
+            lines.append(f"| {c.label} | {c.n} | — | — | — | — |")
+    if card.overall_label:
+        headline = (
+            f"**Best-seasoned read ({card.overall_label}):** median excess return "
+            f"{_pct(card.overall_median_alpha)} vs SPY, "
+            f"{card.overall_beat_spy}/{card.overall_horizon_n} beat SPY."
         )
+    else:
+        headline = (
+            f"**Best-seasoned read:** no horizon has {MIN_SAMPLE}+ matured "
+            "names yet — medians withheld until they do."
+        )
+    coverage = f"{card.overall_n} name(s) matured to at least one horizon"
+    if card.pending:
+        coverage += f"; {card.pending} priced and maturing"
+    if card.unpriceable:
+        coverage += f"; {card.unpriceable} unpriceable this run"
     lines += [
         "",
-        f"**Overall:** {card.overall_n} names ever proposed — median excess return "
-        f"{_pct(card.overall_median_alpha)} vs SPY, {card.overall_beat_spy}/{card.overall_n} beat SPY."
-        + (f" ({card.unpriceable} unpriceable, excluded)" if card.unpriceable else ""),
+        headline,
         "",
-        "_Total return incl. dividends (adjusted close), every proposal counted "
-        "from its first appearance, never revised; names that cannot be priced "
-        "(delisted / fetch-dark) are excluded from the medians and counted above. "
-        "The market is the answer key — Argus never grades itself._",
+        f"_Coverage: {coverage}. Each horizon is the realized return from the entry "
+        "close to the close that many weeks later (adjusted, incl. dividends), vs SPY "
+        "over the identical window — locked once measured, never revised. The market "
+        "is the answer key; Argus never grades itself._",
     ]
     return lines
 

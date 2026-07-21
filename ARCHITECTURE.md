@@ -974,14 +974,57 @@ Honest by construction:
   touch the network.
 - **Never revised** — `scorecard.compute_marks` runs in the scout
   orchestration (`_score_past_proposals`, network-side) and the marks persist
-  immutably in `scorecard_marks` per scoring run (schema v5). Names first
-  proposed *today* have no elapsed time and are skipped until they mature.
+  immutably in `scorecard_marks` per scoring run. Names first proposed *today*
+  have no elapsed time and are skipped until they mature.
 - **Reproducible** — `queries._scorecard` rebuilds the summary
-  (`scorecard.summarize`: age cohorts + overall median α + hit-rate)
-  deterministically from the persisted marks, so `argus report --run N`
-  reproduces the scorecard bit-for-bit. The digest renders it as a section;
-  the box's genuine forward log begins the first week a prior proposal has
-  had time to move.
+  (`scorecard.summarize`) deterministically from the persisted marks, so
+  `argus report --run N` reproduces the scorecard bit-for-bit.
+
+### Fixed horizons — v1.22 (honest scorecard)
+
+The original scorecard measured "total return since first proposed" — a number
+that quietly *re-prices every run*: a past call looks better or worse for
+reasons unrelated to the call, only because the as-of date moved. The scorecard
+now grades at **fixed horizons** — 4, 13, 26, and 52 weeks after first proposal
+(`scorecard.HORIZONS`). A horizon return is **locked once measured**: the
+4-week return of a name proposed in May never changes again. That is the honest
+forward log.
+
+- **One row per (run, name, matured horizon)** in `scorecard_marks` (schema
+  v15, PK `(run_id, ticker, horizon_weeks)`); `horizon_weeks=0` is the **entry
+  sentinel** — priced at entry, grades nothing — so the store alone can tell
+  *priced-but-too-young* from *unpriceable*. Old age-cohort marks are
+  semantically incompatible and the v14→v15 migration **drops** them (the
+  forward log is young — nothing had reached even 4 weeks — so the cost is nil).
+- **Three disjoint, disclosed buckets** (`scorecard.summarize`): `matured`
+  (≥1 horizon mark), `pending` (priced at entry, no horizon yet), `unpriceable`
+  (no entry price). Absence of signal (young) never reads as absence of data.
+- **Min-sample gate** (`MIN_SAMPLE=3`): a horizon's medians are withheld
+  (rendered `—`) until enough names have matured; `n` is always shown, and the
+  headline roll-up is the *longest* horizon that clears the gate.
+
+### The evidence contract — v1.22
+
+Every number on a scout candidate carries a claim to trust; `evidence.py`
+(pure) makes it explicit and non-subjective — provenance and thresholds
+restated as fact, never a forecast or an opinion (the read-only /
+no-interpretation constraint holds):
+
+- **Four-state backing label** per field (`evidence_state`): `corroborated`
+  (gate-accepted + a second source agreed), `single-source`, `claim-only` (the
+  gates did not confirm a value the screener claimed), `missing`.
+- **Screen-exit conditions** (`screen_exit_conditions`): the human's screen
+  thresholds restated as the factual lines that drop a name — read back from
+  the *persisted* per-name reason strings (never the live config, which could
+  drift), so `report --run N` reproduces them. One screen-level fact, shown once
+  in markdown / per detail page in the PDF.
+- **Data flags** (`data_flags`): factual per-name observations about the
+  evidence — a metric near a screen boundary, a claim-only or single-source
+  core metric, a quarantined field. "D/E 0.95 is within 5% of the 1.0 ceiling",
+  never "this is risky".
+
+The digest renders both as sections; the box's genuine forward log begins the
+first week a prior proposal reaches the 4-week mark.
 
 ## Post-v1 seams (built), and where extensions land
 

@@ -167,6 +167,35 @@ def test_migrate_v9_adds_etf_holdings(tmp_path):
     con.close()
 
 
+def test_migrate_v14_rebuilds_scorecard_marks_to_fixed_horizons(tmp_path):
+    """v1.22: the scorecard moves to fixed horizons. The old age-cohort marks
+    (weeks_out) are semantically incompatible, so the step DROPS them and
+    rebuilds the table with horizon_weeks — a deliberate, documented data loss
+    (the forward log is young). A stray old row must not survive."""
+    con = connect(tmp_path / "t.db")
+    migrate(con)
+    # Recreate a v14-shaped scorecard_marks (weeks_out, PK on run/ticker) with a
+    # row that the rebuild must discard.
+    con.execute("DROP TABLE scorecard_marks")
+    con.execute(
+        """CREATE TABLE scorecard_marks (
+            run_id INTEGER NOT NULL, ticker TEXT NOT NULL, first_proposed_at TEXT NOT NULL,
+            weeks_out INTEGER NOT NULL, name_return REAL NOT NULL, spy_return REAL NOT NULL,
+            PRIMARY KEY (run_id, ticker)
+        ) WITHOUT ROWID"""
+    )
+    con.execute(
+        "INSERT INTO scorecard_marks VALUES (1, 'OLD', '2026-06-01', 3, 0.1, 0.05)"
+    )
+    con.execute("PRAGMA user_version = 14")
+    migrate(con)
+    assert con.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    columns = {row[1] for row in con.execute("PRAGMA table_info(scorecard_marks)")}
+    assert "horizon_weeks" in columns and "weeks_out" not in columns
+    assert con.execute("SELECT COUNT(*) FROM scorecard_marks").fetchone()[0] == 0
+    con.close()
+
+
 def test_earnings_results_dedup_on_natural_key(con):
     insert = """INSERT OR IGNORE INTO earnings_results
         (ticker, quarter_end, eps_actual, eps_estimate, source, fetched_at, first_seen_run_id)

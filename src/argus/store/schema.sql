@@ -224,18 +224,21 @@ CREATE TABLE etf_holdings (
 ) WITHOUT ROWID;
 
 -- Scout self-scoring — an immutable forward log ("grade the grader"). On each
--- scout run, every name scout has EVER proposed is scored: total return since
--- it first surfaced vs SPY over the same window. Persisted per scoring run so
--- the scorecard reproduces bit-for-bit and is never retroactively revised.
--- The market is the answer key; the engine never grades itself.
+-- scout run, every name scout has EVER proposed is scored at FIXED horizons
+-- (4/13/26/52 weeks from first proposal): the realized return over each matured
+-- horizon vs SPY over the identical window. One row per (run, name, horizon);
+-- horizon_weeks=0 is the entry sentinel (priced at entry, grades nothing).
+-- Persisted per scoring run so the scorecard reproduces bit-for-bit and is
+-- never retroactively revised. The market is the answer key; the engine never
+-- grades itself.
 CREATE TABLE scorecard_marks (
     run_id            INTEGER NOT NULL REFERENCES runs(run_id),  -- the SCORING run
     ticker            TEXT    NOT NULL,
     first_proposed_at TEXT    NOT NULL,   -- date scout first proposed this name
-    weeks_out         INTEGER NOT NULL,   -- whole weeks from first proposal to this run
-    name_return       REAL    NOT NULL,   -- fraction; total return incl. divs (adjusted close)
-    spy_return        REAL    NOT NULL,   -- SPY total return over the same window
-    PRIMARY KEY (run_id, ticker)
+    horizon_weeks     INTEGER NOT NULL,   -- 0 = entry sentinel; else 4 | 13 | 26 | 52
+    name_return       REAL    NOT NULL,   -- fraction, entry → horizon close (adjusted, incl. divs)
+    spy_return        REAL    NOT NULL,   -- SPY return over the identical window
+    PRIMARY KEY (run_id, ticker, horizon_weeks)
 ) WITHOUT ROWID;
 
 -- Emitted events, persisted so `argus report --run N` regenerates any digest

@@ -66,6 +66,7 @@ from argus.digest import (
     _pct,
     _ts,
 )
+from argus.evidence import data_flags, evidence_state, screen_exit_conditions
 from argus.fields import SPECS, Field, Source
 from argus.models import (
     CompanyProfile,
@@ -76,6 +77,7 @@ from argus.models import (
     ThesisCheckResult,
     TickerReport,
 )
+from argus.scorecard import MIN_SAMPLE
 from argus.thesis import evaluate_thesis_checks
 
 # ticker → chronological (date, close) points for ~1y, or None when history
@@ -130,9 +132,9 @@ _PROMOTE_LINE = 'Argus proposes; the thesis is yours — argus promote {ticker} 
 # two artifacts never tell different stories about how past proposals have done.
 _SCORECARD_EMPTY = "No proposal has had time to play out yet — the forward log starts now."
 _SCORECARD_CAPTION = (
-    "Total return incl. dividends; every proposal counted from first appearance, "
-    "never revised; unpriceable names (delisted / fetch-dark) are excluded from "
-    "medians and counted — the market is the answer key."
+    "Each horizon is the realized return from entry to the close that many weeks "
+    "later (adjusted, incl. dividends) vs SPY over the identical window — locked "
+    "once measured, never revised. The market is the answer key."
 )
 
 # Human-facing field names — mirrors the markdown digest's labels exactly
@@ -720,7 +722,7 @@ def _scout_scorecard(fig: Figure, cur: _Cursor, report: RunReport) -> None:
             _scorecard_empty_line(card), size=8.5, color=_SECONDARY, width=118, max_lines=2
         )
         return
-    columns = ["First proposed", "Names", "Median return", "SPY", "Median excess", "Beat SPY"]
+    columns = ["Horizon", "Names", "Median return", "SPY", "Median excess", "Beat SPY"]
     widths = [0.24, 0.12, 0.20, 0.13, 0.17, 0.14]
     _table(fig, cur, columns, _scorecard_rows(card), widths)
     cur.gap(0.004)
@@ -739,15 +741,26 @@ _SCORECARD_CHART_CAP = 26  # more scored names than fit; disclose the overflow
 def _scorecard_chart(fig: Figure, cur: _Cursor, card: Scorecard) -> None:
     """Per-name α vs SPY as diverging bars — the honest self-grade made
     visible: green beat the market, red lagged, the sign always printed too
-    (never color alone). Best-to-worst; realized data only, the market the
-    answer key. Skipped when the run persisted no per-name marks (old runs
-    predate the field), so the cohort table still stands alone."""
-    marks = sorted(card.marks, key=lambda m: m.alpha, reverse=True)
+    (never color alone). One bar per name, at its LONGEST matured horizon (the
+    most-seasoned read for that name), best-to-worst; realized data only, the
+    market the answer key. Skipped when the run persisted no graded marks (all
+    names still maturing), so the cohort table still stands alone."""
+    # card.marks carries one entry per (name, horizon); collapse to each name's
+    # longest matured horizon so a name is one bar, not several.
+    longest: dict[str, object] = {}
+    for m in card.marks:
+        best = longest.get(m.ticker)
+        if best is None or m.horizon_weeks > best.horizon_weeks:
+            longest[m.ticker] = m
+    marks = sorted(longest.values(), key=lambda m: m.alpha, reverse=True)
     if not marks:
         return
     shown = marks[:_SCORECARD_CHART_CAP]
     cur.gap(0.008)
-    cur.line("Per-name excess return vs SPY (realized, since first proposed)", size=8.5, color=_SECONDARY)
+    cur.line(
+        "Per-name excess return vs SPY (realized, at each name's longest matured horizon)",
+        size=8.5, color=_SECONDARY,
+    )
     cur.gap(0.004)
     height = 0.016 * len(shown)
     ax = fig.add_axes((0.16, cur.y - height, 0.72, height))
@@ -784,40 +797,64 @@ def _scorecard_chart(fig: Figure, cur: _Cursor, card: Scorecard) -> None:
 
 
 def _scorecard_rows(card: Scorecard) -> list[list[str]]:
-    """One row per cohort — signed percents throughout (+3.4% / -1.2%), the
-    same columns and ordering as the digest's Scorecard table."""
-    return [
-        [
-            _clip(c.label, 30),
-            str(c.n),
-            _pct(c.median_return),
-            _pct(c.median_spy),
-            _pct(c.median_alpha),
-            f"{c.beat_spy}/{c.n}",
-        ]
-        for c in card.cohorts
-    ]
+    """One row per matured horizon — signed percents throughout (+3.4% / -1.2%),
+    the same columns and ordering as the digest's Scorecard table. A horizon
+    that has not cleared the min-sample gate shows its count but withholds the
+    medians ('—'), never a misleading one- or two-name median."""
+    rows: list[list[str]] = []
+    for c in card.cohorts:
+        if c.enough:
+            rows.append(
+                [
+                    _clip(c.label, 30),
+                    str(c.n),
+                    _pct(c.median_return),
+                    _pct(c.median_spy),
+                    _pct(c.median_alpha),
+                    f"{c.beat_spy}/{c.n}",
+                ]
+            )
+        else:
+            rows.append([_clip(c.label, 30), str(c.n), "—", "—", "—", "—"])
+    return rows
 
 
 def _scorecard_overall_line(card: Scorecard) -> tuple[str, str]:
-    """The overall roll-up line and its tone: a non-negative median α wears the
-    quiet ok tone (_SECONDARY), a negative one the critical tone (_CRITICAL) —
-    the same good/bad coloring the thesis panel uses, so the reader reads the
-    grade at a glance."""
-    n = card.overall_n
-    text = (
-        f"Overall: {n} name{'s' if n != 1 else ''} — "
-        f"median excess return {_pct(card.overall_median_alpha)} vs SPY, "
-        f"{card.overall_beat_spy}/{n} beat SPY."
-    )
-    tone = _SECONDARY if card.overall_median_alpha >= 0 else _CRITICAL
-    return text, tone
+    """The roll-up line and its tone. The headline is the LONGEST horizon that
+    clears the min-sample gate (the most-seasoned honest read): a non-negative
+    median excess wears the quiet ok tone, a negative one the critical tone,
+    and 'no horizon seasoned enough yet' the muted tone. The coverage tail
+    keeps pending/unpriceable counts visible so absence of signal never reads
+    as absence of data."""
+    coverage = f"{card.overall_n} matured to ≥1 horizon"
+    if card.pending:
+        coverage += f", {card.pending} maturing"
+    if card.unpriceable:
+        coverage += f", {card.unpriceable} unpriceable"
+    if card.overall_label:
+        text = (
+            f"Best-seasoned read ({card.overall_label}): median excess "
+            f"{_pct(card.overall_median_alpha)} vs SPY, "
+            f"{card.overall_beat_spy}/{card.overall_horizon_n} beat SPY · {coverage}."
+        )
+        tone = _SECONDARY if card.overall_median_alpha >= 0 else _CRITICAL
+        return text, tone
+    return f"No horizon has {MIN_SAMPLE}+ matured names yet · {coverage}.", _MUTED
 
 
 def _scorecard_empty_line(card: Scorecard | None) -> str:
     """The empty-state line, distinguishing absence of signal from absence of
-    data (mirrors the digest): eligible-but-unpriceable names mean the price
-    fetch was down this run, NOT that nothing has matured."""
+    data three ways (mirrors the digest): names still maturing toward the
+    4-week mark (pending), a price fetch down this run (unpriceable), or simply
+    nothing eligible yet."""
+    if card and card.pending:
+        tail = (
+            f" ({card.unpriceable} could not be priced this run.)" if card.unpriceable else ""
+        )
+        return (
+            f"No proposal has reached the 4-week mark yet — {card.pending} name(s) are "
+            f"priced and maturing; grading begins at 4 weeks.{tail}"
+        )
     if card and card.unpriceable:
         return (
             f"Price data was unavailable for all {card.unpriceable} eligible past "
@@ -1598,6 +1635,7 @@ def _detail_page(
                 size=8, color=_MUTED, style="italic", width=118, max_lines=2,
             )
         _peer_dotplot(fig, cur, proposal, snapshot)
+        _evidence_contract(cur, proposal, ticker_report)
     else:
         assert ticker_report is not None  # watch subjects always carry their report
         if ticker_report.context.thesis:
@@ -1617,13 +1655,51 @@ def _detail_page(
     _revenue_chart(fig, (0.665, 0.435, 0.275, 0.165), revenue_series.get(ticker))
 
     cur = _Cursor(fig, y=0.375)
-    cur.line("Metrics — gate-accepted, with provenance (\u2713 = corroborated)", size=9.5, weight="bold")
+    cur.line("Metrics — gate-accepted, with provenance & evidence "
+        "(\u2713 = corroborated by a second source)",
+        size=9.5, weight="bold",
+    )
     cur.gap(0.005)
-    for text, tone in _metric_lines(ticker_report):
+    for text, tone in _metric_lines(ticker_report, proposal):
         cur.line(text, size=7.5, family="monospace", color=tone, step=0.0142)
 
     fig.text(0.5, 0.03, _UNGATED_FOOTER, ha="center", va="bottom", fontsize=8, color=_MUTED)
     return fig
+
+
+# The charts occupy the page from y≈0.60 down; the evidence contract lives in
+# the whitespace above them, and stops before it would collide (the markdown
+# digest is canonical, so a rare truncation here loses no information).
+_EVIDENCE_FLOOR = 0.615
+
+
+def _evidence_contract(
+    cur: _Cursor, proposal: ScoutProposal, ticker_report: TickerReport | None
+) -> None:
+    """The two per-name honesty blocks, drawn in the mid-page whitespace above
+    the charts: the screen-exit conditions (the human's screen thresholds
+    restated as the factual lines that would drop this name — the same for every
+    proposal, shown per page because a reader reads one page at a time) and the
+    data flags (factual, per-name observations about the evidence: claim-only or
+    quarantined metrics, a single-source price, a value near a screen boundary).
+    No forecast, no opinion — data vs the stated lines. Guarded by a floor so it
+    never overruns the charts."""
+    snapshot = ticker_report.snapshot if ticker_report is not None else None
+    exits = screen_exit_conditions(proposal.screen_reasons)
+    if exits and cur.y > _EVIDENCE_FLOOR + 0.03:
+        cur.gap(0.008)
+        cur.wrapped(
+            "Screen exit — leaves the shortlist if: " + " · ".join(exits),
+            size=7.5, color=_SECONDARY, width=125, max_lines=2,
+        )
+    flags = data_flags(proposal.screen_reasons, proposal.screener_metrics, snapshot)
+    if flags and cur.y > _EVIDENCE_FLOOR + 0.02:
+        cur.gap(0.006)
+        cur.line("Data flags (factual):", size=8, weight="bold", color=_INK)
+        for flag in flags:
+            if cur.y <= _EVIDENCE_FLOOR:
+                break  # out of room — the markdown carries the full list
+            cur.wrapped(f"• {flag}", size=7.5, color=_SECONDARY, width=122, max_lines=2)
 
 
 # --- Thesis checks (watch only — the human's falsifiable conditions) ------------
@@ -2072,13 +2148,18 @@ def _unavailable_panel(
     )
 
 
-def _metric_lines(ticker_report: TickerReport | None) -> list[tuple[str, str]]:
-    """The tri-state panel, one line per field in enum order:
-    value + provenance (ink), DATA QUARANTINED + reason (critical — the
-    label carries the meaning, the color only flags it), or '— no data'
+def _metric_lines(
+    ticker_report: TickerReport | None, proposal: ScoutProposal | None = None
+) -> list[tuple[str, str]]:
+    """The evidence panel, one line per field in enum order, each carrying its
+    four-state backing label: value + provenance + [corroborated]/[single-source]
+    (ink), DATA QUARANTINED + reason (critical — the label carries the meaning,
+    the color only flags it), '— screener-claimed only (unverified)' when the
+    gates did not confirm a value the screener claimed (muted), or '— no data'
     (muted). A missing snapshot renders all-dash — disclosed, never crashed."""
     lines: list[tuple[str, str]] = []
     snapshot: Snapshot | None = ticker_report.snapshot if ticker_report else None
+    screener_metrics = proposal.screener_metrics if proposal is not None else {}
     if ticker_report is None:
         lines.append(("No enrichment snapshot was recorded for this candidate.", _CRITICAL))
     elif snapshot is None:
@@ -2093,14 +2174,22 @@ def _metric_lines(ticker_report: TickerReport | None) -> list[tuple[str, str]]:
         if fv is not None:
             marks = "".join(f"  ✓{s.value}" for s in sorted(fv.corroborated_by))
             provenance = f"{fv.source.value}, {_ts(fv.fetched_at)}{marks}"
-            lines.append((f"{prefix}{_fmt_value(field, fv.value):<14}{provenance}", _INK))
+            tag = "[corroborated]" if fv.corroborated_by else "[single-source]"
+            lines.append(
+                (_clip(f"{prefix}{_fmt_value(field, fv.value):<14}{provenance}  {tag}", 118), _INK)
+            )
             continue
         hits = snapshot.quarantined.get(field) if snapshot else None
         if hits:
             details = "; ".join(hit.detail for hit in hits)
             lines.append((_clip(f"{prefix}DATA QUARANTINED — {details}", 105), _CRITICAL))
             continue
-        lines.append((f"{prefix}— no data", _MUTED))
+        # Absent: distinguish a value the screener claimed but the gates never
+        # confirmed (claim-only) from one no source ever offered (missing).
+        if evidence_state(field, snapshot, screener_metrics) == "claim-only":
+            lines.append((f"{prefix}— screener-claimed only (unverified this run)", _MUTED))
+        else:
+            lines.append((f"{prefix}— no data", _MUTED))
     return lines
 
 

@@ -515,13 +515,13 @@ def write_scorecard_marks(
         for m in marks:
             con.execute(
                 """INSERT OR IGNORE INTO scorecard_marks
-                     (run_id, ticker, first_proposed_at, weeks_out, name_return, spy_return)
+                     (run_id, ticker, first_proposed_at, horizon_weeks, name_return, spy_return)
                    VALUES (?, ?, ?, ?, ?, ?)""",
                 (
                     run_id,
                     m.ticker,
                     m.first_proposed_at.isoformat(),
-                    m.weeks_out,
+                    m.horizon_weeks,
                     m.name_return,
                     m.spy_return,
                 ),
